@@ -16,7 +16,7 @@ foo is mainly intended for my own personal use.
 The configuration options provided by foo are intentionally primitive:
 
 1. Kernel packages.
-2. Firmware and kernel modules to include in the initrd.
+2. Kernel modules to include in the initrd.
 3. Commands to run in the initrd.
 4. Commands to run as init (PID 1).
 5. Paths and artifacts to include in the system closure.

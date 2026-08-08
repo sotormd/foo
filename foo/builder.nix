@@ -121,7 +121,7 @@ let
 
         fakeroot systemd-repart \
           --empty=create \
-          --size=1G \
+          --size=5G \
           --definitions=repart.d \
           $out
       '';

@@ -1,9 +1,9 @@
 let
   # contains
   # foo.version
-  # foo.options -> valid values, also does type checking
+  # foo.options ->  valid values, does no checking
   # foo.builder ->  combines options with provided config and pkgs
-  #                   to produce final targets, like toplevel
+  #                 to produce final targets, like toplevel
   foo-default = import ./foo;
 
   buildFoo =
@@ -21,8 +21,7 @@ let
       {
         inherit (foo) version;
 
-        # contains all the targets like
-        # toplevel, diskImage
+        # contains all the targets
         build = foo.builder { inherit config pkgs; };
 
         # options doc

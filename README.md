@@ -1,6 +1,6 @@
 # foo
 
-A Nix-based operating system.
+A simple Nix-based operating system.
 
 foo, pronounced /fuː/, is an operating system designed around
 [Nix](https://github.com/nixos/nix) and

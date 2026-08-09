@@ -434,8 +434,10 @@ let
   etcProfile = pkgs.writeTextFile {
     name = "etc-profile";
     text = ''
-      export TERM=linux
       export PATH=/run/current-system/sw/bin
+      export SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt
+
+      export TERM=linux
       export PS1="\n\[\033[1;32m\]\w %\[\033[0m\] "
 
       umask 0077

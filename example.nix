@@ -136,8 +136,9 @@ let
     mount -t vfat "$boot" /root/boot
 
     # nix store
-    mkdir -p /root/nix/store
-    mount -o bind /root/persist/nix/store /root/nix/store
+    mkdir -p /root/nix
+    mount -o bind /root/persist/nix /root/nix
+    mount -o bind /root/nix/store /root/nix/store
     mount -o remount,ro,bind,nosuid,nodev /root/nix/store
 
     # home

@@ -443,7 +443,16 @@ let
       export SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt
 
       export TERM=linux
-      export PS1="\n\[\033[1;32m\]\w %\[\033[0m\] "
+
+      if [ "$USER" == "root" ]; then
+        PROMPT_COLOR="1;31m"
+        PROMPT_SYMBOL="#"
+      else
+        PROMPT_COLOR="1;32m"
+        PROMPT_SYMBOL='%'
+      fi
+
+      PS1="\n\[\033[$PROMPT_COLOR\]\w $PROMPT_SYMBOL\[\033[0m\] "
 
       umask 0077
     '';

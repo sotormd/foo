@@ -122,12 +122,33 @@ let
     root=$(find_label FOO-ROOT)
 
     echo initrd: mounting real root
+
+    # tmpfs rootfs
     mkdir -p /root
-    mount -t ext4 "$root" /root
+    mount -t tmpfs tmpfs /root
+
+    # persistent disk
+    mkdir -p /root/persist
+    mount -t ext4 "$root" /root/persist
+
+    # boot
     mkdir -p /root/boot
     mount -t vfat "$boot" /root/boot
-    mount -o bind /root/nix/store /root/nix/store
-    mount -o remount,ro,bind,nosuid,nodev /root/nix/store /root/nix/store
+
+    # nix store
+    mkdir -p /root/nix/store
+    mount -o bind /root/persist/nix/store /root/nix/store
+    mount -o remount,ro,bind,nosuid,nodev /root/nix/store
+
+    # home
+    mkdir -p /root/persist/home
+    mkdir -p /root/home
+    mount -o bind,nosuid,nodev /root/persist/home /root/home
+
+    # var
+    mkdir -p /root/persist/var
+    mkdir -p /root/var
+    mount -o bind,nosuid,nodev /root/persist/var /root/var
 
     echo initrd: switching to real root
     exec switch_root /root "$BOOTED_CLOSURE/init"
@@ -258,8 +279,8 @@ let
     echo activate: setting up users
 
     # shadow 
-    if [ -f /secrets/shadow ]; then 
-        cat /secrets/shadow > /etc/shadow
+    if [ -f /persist/secrets/shadow ]; then 
+        cat /persist/secrets/shadow > /etc/shadow
     else
         # use default shadow file if secret is not found
         cat ${shadow} > /etc/shadow 

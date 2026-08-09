@@ -38,10 +38,11 @@ checked.
 
 An example is provided which uses foo to build a minimal system with:
 
-1. NixOS-like activation and system closure
-2. /etc as a erofs overlay
-3. Multi-user Nix package manager
-4. Basic networking
+1. NixOS-like activation and system closure with familiar `sw` and `etc`
+2. `/etc` as an overlay with an immutable EROFS lower and writable tmpfs upper
+3. Multi-user Nix with read-only `/nix/store` and `nix-daemon` in a private
+   mount namespace
+4. Basic networking and SSL certificates
 
 To build the example:
 

@@ -41,6 +41,7 @@ let
         "earlycon=uart8250,io,0x3f8,115200"
         "quiet"
         "loglevel=0"
+        "ipv6.disable=1"
       ];
     };
     initrd = {
@@ -125,6 +126,8 @@ let
     mount -t ext4 "$root" /root
     mkdir -p /root/boot
     mount -t vfat "$boot" /root/boot
+    mount -o bind /root/nix/store /root/nix/store
+    mount -o remount,ro,bind,nosuid,nodev /root/nix/store /root/nix/store
 
     echo initrd: switching to real root
     exec switch_root /root "$BOOTED_CLOSURE/init"
@@ -368,8 +371,10 @@ let
     fi
 
     # start the nix daemon
-    exec nix-daemon
-
+    exec unshare -m sh -c '
+      mount -o remount,rw,bind,nosuid,nodev /nix/store
+      exec nix-daemon
+    '
   '';
 
   # networking script

@@ -563,7 +563,7 @@ let
   '';
 
   # default /etc/shadow
-  # this is laoded separately
+  # this is loaded separately
   # this is used ONLY If /secrets/shadow doesn't exist
   # user: foo  ; password: foo
   # user: root ; password: root

@@ -1,6 +1,7 @@
 # foo
 
-A simple Nix-based operating system.
+A simple Nix-based operating system ~ a small set of primitives for constructing
+Linux systems with Nix.
 
 foo, pronounced /fuː/, is an operating system designed around
 [Nix](https://github.com/nixos/nix) and
@@ -33,8 +34,8 @@ To produce an options doc (markdown):
 nix eval -f example.nix build.optionsMd --raw
 ```
 
-This also available in [options.md](./options.md). Options are not validated or
-checked.
+This is also available in [options.md](./options.md). Options are not validated
+or checked.
 
 An example is provided which uses foo to build a minimal system with:
 

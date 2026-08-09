@@ -6,20 +6,6 @@ let
     sha256 = sources.nixpkgs.hash;
   }) { system = "x86_64-linux"; };
 
-  sotormd-nixos-packages-list =
-    (import
-      "${
-        (fetchTarball {
-          url = "https://github.com/sotormd/nixos/archive/${sources.sotormd-nixos.commit}.tar.gz";
-          sha256 = sources.sotormd-nixos.hash;
-        })
-      }/modules/core/packages/system.nix"
-      {
-        inherit pkgs;
-        inherit (pkgs) lib;
-      }
-    ).environment.systemPackages;
-
   inherit (pkgs) lib;
 
   buildFoo = import ./build-foo.nix;
@@ -68,12 +54,20 @@ let
     };
   };
 
+  # create a PATH from nix packages
   makePATH = packages: lib.concatStringsSep ":" (map (x: "${x}/bin") packages);
+  busyboxPATH = extra: "export PATH=\"${makePATH (extra ++ [ pkgs.busybox ])}\"";
 
+  # load kernel modules using modprobe
+  # should use wrapped modprobe from PATH
   loadModules = modules: lib.concatStringsSep "\n" (map (x: "modprobe \"${x}\"") modules);
 
+  # sh for most scripts
   sh = lib.getExe' pkgs.busybox "sh";
 
+  # kernel modules that we need
+  # adding things here will add it to respective makeModulesClosure
+  # and also import them using loadModules
   modules = {
     initrd = [
       "ahci"
@@ -84,11 +78,21 @@ let
       "nls_iso8859-1"
     ];
     init = [
+
+      # required for /etc
       "erofs"
       "overlay"
+
+      # required for networking
+      "virtio"
+      "virtio_net"
+      "virtio_pci"
+      "af_packet"
+
     ];
   };
 
+  # commands to run in initrd
   initrdCommands = ''
     printf '\033[0m\033[39;49m\033[H\033[2J'
     printf '\033[2J\033[H\033[0m\033[1;32m--initrd--\033[0m\n'
@@ -126,10 +130,11 @@ let
     exec switch_root /root "$BOOTED_CLOSURE/init"
   '';
 
+  # commands to run as PID 1 (init)
   initCommands = ''
     #!${sh}
 
-    export PATH="${makePATH [ pkgs.busybox ]}"
+    ${busyboxPATH [ ]}
 
     printf '\033[0m\033[1;32m--init--\033[0m\n'
 
@@ -137,32 +142,37 @@ let
     env -i closure="$BOOTED_CLOSURE" "$BOOTED_CLOSURE/activate"
     ln -sfn "$BOOTED_CLOSURE" /run/booted-system
 
+    echo init: starting networking
+    env -i ${networking} >/dev/null 2>&1 &
+
     echo init: starting nix-daemon
     mkdir -p /var/services/nix-daemon
     env -i ${nixDaemon} >/var/services/nix-daemon/stdout 2>/var/services/nix-daemon/stderr &
 
     echo init: starting getty
-    mkdir -p /var/services/getty
-    env -i  ${getty} >/var/services/getty/stdout 2>/var/services/getty/stderr &
+    env -i  ${getty} >/dev/null 2>&1 &
 
     exec ${stub}
   '';
 
+  # system generation activation
+  # this should be possible to re-run during runtime
+  # handles
+  # 1. creating basic filesystems (idempotent)
+  # 2. link system closure (atomic, idempotent)
+  # 3. mounting erofs /etc (atomic, idempotent) while keeping runtime state
+  # 4. creating passwd/group/shadow (idempotent)
+  # 5. setting up hostname (idempotent)
   activate = pkgs.writeScript "activate" ''
     #!${sh}
 
     umask 0022
 
     # we use features that busybox doesn't have
-    export PATH="${
-      makePATH [
-        pkgs.coreutils
-        pkgs.util-linux
-        pkgs.gnugrep
-        pkgs.hostname
-        wrappers.modprobe
-      ]
-    }"
+    ${busyboxPATH [
+      pkgs.util-linux # busybox mount/umount doesn't have --beneath/--recursive
+      wrappers.modprobe # wrapped modprobe to look for modules in the right place
+    ]}
 
     # create and mount filesystems
     # if not already mounted
@@ -278,6 +288,8 @@ let
     hostname $(cat /etc/hostname)
   '';
 
+  # software to include in system closure
+  # basically the same as nixos /run/current-system/sw
   software = pkgs.buildEnv {
     name = "software";
     paths = [
@@ -287,13 +299,15 @@ let
       pkgs.fastfetch
       pkgs.tmux
 
-      (lib.hiPrio wrappers.modprobe) # sotormd-nixos provides pkgs.kmod
+      (lib.hiPrio wrappers.modprobe) # busybox provides modprobe
       wrappers.poweroff
 
-    ]
-    ++ sotormd-nixos-packages-list;
+      pkgs.busybox
+
+    ];
   };
 
+  # wrapped packages
   wrappers = {
     modprobe = pkgs.writeScriptBin "modprobe" ''
       #!${sh}
@@ -304,7 +318,9 @@ let
     poweroff = pkgs.writeScriptBin "poweroff" ''
       #!${sh}
 
-      ${pkgs.util-linux}/bin/kill -TERM 1
+      ${busyboxPATH [ ]}
+
+      kill -TERM 1
     '';
   };
 
@@ -334,6 +350,7 @@ let
       trusted-users = root
       use-xdg-base-directories = true
       warn-dirty = false
+      ssl-cert-file = /etc/ssl/certs/ca-bundle.crt
     '';
     destination = "/nix/nix.conf";
   };
@@ -342,12 +359,7 @@ let
   nixDaemon = pkgs.writeScript "nix-daemon" ''
     #!${sh}
 
-    export PATH="${
-      makePATH [
-        nixPackage
-        pkgs.busybox
-      ]
-    }"
+    ${busyboxPATH [ nixPackage ]}
 
     # disk image creates /nix/.registration
     # we need to load the db using this
@@ -360,6 +372,18 @@ let
 
   '';
 
+  # networking script
+  networking = pkgs.writeScript "networking" ''
+    #!${sh}
+
+    ${busyboxPATH [ ]}
+
+    ip link set eth0 up
+    udhcpc -i eth0
+  '';
+
+  # /etc/hostname hostname
+  # this is loaded using hostname
   etcHostname = pkgs.writeTextFile {
     name = "etc-hostname";
     text = ''
@@ -368,6 +392,7 @@ let
     destination = "/hostname";
   };
 
+  # nsswitch config
   etcNsswitchConf = pkgs.writeTextFile {
     name = "etc-nsswitch-conf";
     text = ''
@@ -389,6 +414,7 @@ let
     destination = "/nsswitch.conf";
   };
 
+  # os-release!
   etcOsRelease = pkgs.writeTextFile {
     name = "etc-os-release";
     text = ''
@@ -403,6 +429,8 @@ let
     destination = "/os-release";
   };
 
+  # this is loaded when a user logs in
+  # PATH can be set to just /run/current-system/sw/bin
   etcProfile = pkgs.writeTextFile {
     name = "etc-profile";
     text = ''
@@ -415,6 +443,12 @@ let
     destination = "/profile";
   };
 
+  # ssl certs
+  etcSsl = pkgs.runCommand "etc-ssl" { } ''
+    ln -sf "${pkgs.cacert}/etc" $out
+  '';
+
+  # final etc tree
   etc = pkgs.symlinkJoin {
     name = "etc";
     paths = [
@@ -423,9 +457,11 @@ let
       etcNsswitchConf
       etcOsRelease
       etcProfile
+      etcSsl
     ];
   };
 
+  # erofs etc image
   etcErofs = pkgs.runCommand "etc-erofs" { nativeBuildInputs = [ pkgs.erofs-utils ]; } ''
     mkdir -p etc
 
@@ -437,9 +473,11 @@ let
       etc
   '';
 
+  # /etc/passwd
+  # this is loaded separately
   passwd = pkgs.writeText "etc-passwd" ''
-    root:x:0:0:System administrator:/root:/run/current-system/sw/bin/bash
-    foo:x:1000:1000:Standard user:/home/foo:/run/current-system/sw/bin/bash
+    root:x:0:0:System administrator:/root:/run/current-system/sw/bin/ash
+    foo:x:1000:1000:Standard user:/home/foo:/run/current-system/sw/bin/ash
     nobody:x:65534:65534:Unprivileged account (don't use!):/var/empty:/run/current-system/sw/bin/nologin
     nixbld1:x:30001:30000:Nix build user 1:/var/empty:/run/current-system/sw/bin/nologin
     nixbld2:x:30002:30000:Nix build user 2:/var/empty:/run/current-system/sw/bin/nologin
@@ -475,6 +513,8 @@ let
     nixbld32:x:30032:30000:Nix build user 32:/var/empty:/run/current-system/sw/bin/nologin
   '';
 
+  # /etc/group
+  # this is loaded separately
   group = pkgs.writeText "etc-group" ''
     root:x:0:
     wheel:x:1:foo
@@ -485,6 +525,9 @@ let
     nixbld:x:30000:nixbld1,nixbld10,nixbld11,nixbld12,nixbld13,nixbld14,nixbld15,nixbld16,nixbld17,nixbld18,nixbld19,nixbld2,nixbld20,nixbld21,nixbld22,nixbld23,nixbld24,nixbld25,nixbld26,nixbld27,nixbld28,nixbld29,nixbld3,nixbld30,nixbld31,nixbld32,nixbld4,nixbld5,nixbld6,nixbld7,nixbld8,nixbld9
   '';
 
+  # default /etc/shadow
+  # this is laoded separately
+  # this is used ONLY If /secrets/shadow doesn't exist
   # user: foo  ; password: foo
   # user: root ; password: root
   shadow = pkgs.writeText "etc-shadow-default" ''
@@ -537,7 +580,7 @@ let
   getty = pkgs.writeScript "getty" ''
     #!${sh}
 
-    export PATH="${makePATH [ pkgs.busybox ]}"
+    ${busyboxPATH [ ]}
 
     while true; do
         setsid -c getty -l login 115200 ttyS0

@@ -41,6 +41,7 @@ An example is provided which uses foo to build a minimal system with:
 1. NixOS-like activation and system closure
 2. /etc as a erofs overlay
 3. Multi-user Nix package manager
+4. Basic networking
 
 To build the example:
 

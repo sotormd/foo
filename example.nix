@@ -211,6 +211,11 @@ let
       wrappers.modprobe # wrapped modprobe to look for modules in the right place
     ]}
 
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "activate: must be run as root" >&2
+        exit 1
+    fi
+
     # create and mount filesystems
     # if not already mounted
     mount_if_not_mounted() {
@@ -330,6 +335,11 @@ let
     set -e
 
     ${busyboxPATH [ nixPackage ]}
+
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "rebuild: must be run as root" >&2
+        exit 1
+    fi
 
     if [ -z "$FOO_CONFIG" ]; then
         echo "environment variable FOO_CONFIG unset" >&2
@@ -516,11 +526,8 @@ let
     text = ''
       ID=foo
       NAME=foo
-      DEFAULT_HOSTNAME=foo
-      PRETTY_NAME="foo ${config.version}"
+      PRETTY_NAME=foo
       VENDOR_NAME=foo
-      VERSION="${config.version}"
-      VERSION_ID="${config.version}"
     '';
     destination = "/os-release";
   };

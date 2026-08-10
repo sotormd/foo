@@ -61,70 +61,11 @@ let
     executable = true;
   };
 
-  toplevel = pkgs.runCommand "foo-system-${config.version}" { } ''
+  toplevel = pkgs.runCommand "foo-system" { } ''
     mkdir -p $out
     ln -s ${init} $out/init 
     ${lib.concatStringsSep "\n" (map (x: "ln -s ${x.source} $out/${x.name}") config.toplevel.paths)}
   '';
-
-  loaderConf = pkgs.writeText "loader-conf" ''
-    timeout 5
-  '';
-
-  loaderEntry = pkgs.writeText "foo.conf" ''
-    title   foo
-    efi     /EFI/Linux/foo-${config.version}.efi
-  '';
-
-  closure = pkgs.closureInfo {
-    rootPaths = [ toplevel ];
-  };
-
-  diskImage =
-    pkgs.runCommand "foo.raw"
-      {
-        nativeBuildInputs = [
-          pkgs.systemd
-          pkgs.fakeroot
-          pkgs.dosfstools
-          pkgs.e2fsprogs
-          pkgs.mtools
-        ];
-      }
-      ''
-        mkdir -p repart.d
-
-        cat > repart.d/00-esp.conf <<EOF
-        [Partition]
-        Type=esp
-        Format=vfat
-        SizeMinBytes=200M
-        SizeMaxBytes=200M
-        Label=FOO-ESP
-        CopyFiles=${uki}:/EFI/Linux/foo-${config.version}.efi
-        CopyFiles=${pkgs.systemd}/lib/systemd/boot/efi/systemd-bootx64.efi:/EFI/BOOT/BOOTX64.EFI
-        CopyFiles=${loaderConf}:/loader/loader.conf
-        CopyFiles=${loaderEntry}:/loader/entries/foo.conf
-        EOF
-
-        cat > repart.d/10-root.conf <<EOF
-        [Partition]
-        Type=root-x86-64
-        Format=ext4
-        Label=FOO-ROOT
-        CopyFiles=${closure}/registration:/nix/.registration
-        EOF
-
-        for path in $(cat ${closure}/store-paths); do
-          echo "CopyFiles=$path:/nix/store/''${path#/nix/store/}" >> repart.d/10-root.conf
-        done
-
-        fakeroot systemd-repart \
-          --empty=create \
-          --size=5G \
-          --definitions=repart.d \
-          $out
-      '';
 
 in
 {
@@ -133,6 +74,5 @@ in
     initrd
     uki
     toplevel
-    diskImage
     ;
 }

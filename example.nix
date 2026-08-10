@@ -109,14 +109,14 @@ let
 
     echo initrd: finding real root
     find_label() {
-      label="$1"
+        label="$1"
 
-      for dev in /dev/*; do
-          blkid "$dev" 2>/dev/null | grep -q "LABEL=\"$label\"" && {
-              echo "$dev"
-              return
-          }
-      done
+        for dev in /dev/*; do
+            blkid "$dev" 2>/dev/null | grep -q "LABEL=\"$label\"" && {
+                echo "$dev"
+                return
+            }
+        done
     }
     boot=$(find_label FOO-ESP)
     root=$(find_label FOO-ROOT)
@@ -163,9 +163,21 @@ let
 
     printf '\033[0m\033[1;32m--init--\033[0m\n'
 
+    if [ -z "$BOOTED_CLOSURE" ]; then
+        echo init: initrd did not provide BOOTED_CLOSURE >&2
+        exit 1
+    fi
+
+    if ! [ -d "$BOOTED_CLOSURE" ]; then
+        echo init: unable to find BOOTED_CLOSURE "$BOOTED_CLOSURE" >&2
+        exit 1
+    fi
+
     echo init: starting activation
+
     env -i closure="$BOOTED_CLOSURE" "$BOOTED_CLOSURE/activate"
     ln -sfn "$BOOTED_CLOSURE" /run/booted-system
+    unset BOOTED_CLOSURE
 
     echo init: starting networking
     env -i ${networking} >/dev/null 2>&1 &
@@ -245,7 +257,6 @@ let
 
     echo activate: linking system closure
 
-    # link system closure
     ln -sfn "$closure" /run/current-system
 
     echo activate: loading kernel modules
@@ -313,6 +324,55 @@ let
     hostname $(cat /etc/hostname)
   '';
 
+  fooRebuild = pkgs.writeScriptBin "foo-rebuild" ''
+    #!${sh}
+
+    set -e
+
+    ${busyboxPATH [ nixPackage ]}
+
+    if [ -z "$FOO_CONFIG" ]; then
+        echo "environment variable FOO_CONFIG unset" >&2
+        exit 1
+    fi
+
+    if ! [ -f "$FOO_CONFIG" ]; then
+        echo "unable to find FOO_CONFIG $FOO_CONFIG" >&2
+        exit 1
+    fi
+
+    current=$(readlink /nix/var/nix/profiles/foo/system | awk -F- '{ print $2 }')
+    echo rebuild: current generation "$current" is at "$(realpath /nix/var/nix/profiles/foo/system)"
+
+    echo rebuild: building system closure
+    closure=$(nix build -f "$FOO_CONFIG" build.toplevel --no-link --print-out-paths)
+
+    echo rebuild: building uki
+    uki=$(nix build -f "$FOO_CONFIG" build.uki --no-link --print-out-paths)
+
+    echo rebuild: adding generation to profile
+    nix-env --profile /nix/var/nix/profiles/foo/system --set "$closure"
+    number=$(readlink /nix/var/nix/profiles/foo/system | awk -F- '{ print $2 }')
+
+    echo rebuild: installing bootloader
+
+    base=$(mktemp -d)
+    cp "$uki" "$base/uki"
+    mv "$base/uki" "/boot/EFI/Linux/foo-generation-$number.efi"
+
+    cat > "/boot/loader/entries/foo-generation-$number.conf" <<EOF
+    title   foo generation $number
+    efi     /EFI/Linux/foo-generation-$number.efi
+    EOF
+
+    rm -rf "$base"
+
+    echo rebuild: starting activation
+    env -i closure="$closure" "$closure/activate"
+
+    echo rebuild: new generation "$number" is at "$closure"
+  '';
+
   # software to include in system closure
   # basically the same as nixos /run/current-system/sw
   software = pkgs.buildEnv {
@@ -320,6 +380,9 @@ let
     paths = [
 
       nixPackage
+      fooRebuild
+
+      pkgs.git
 
       pkgs.fastfetch
       pkgs.tmux
@@ -386,16 +449,22 @@ let
 
     ${busyboxPATH [ nixPackage ]}
 
+    # load nix database
     # disk image creates /nix/.registration
-    # we need to load the db using this
     if [ -f /nix/.registration ]; then
-      nix-store --load-db < /nix/.registration && rm /nix/.registration
+        nix-store --load-db < /nix/.registration && rm /nix/.registration
     fi
+
+    # system generations
+    if ! [ -f /nix/var/nix/profiles/foo ]; then
+        mkdir -p /nix/var/nix/profiles/foo
+    fi
+    nix-env --profile /nix/var/nix/profiles/foo/system --set "$(readlink /run/current-system)"
 
     # start the nix daemon
     exec unshare -m sh -c '
-      mount -o remount,rw,bind,nosuid,nodev /nix/store
-      exec nix-daemon
+        mount -o remount,rw,bind,nosuid,nodev /nix/store
+        exec nix-daemon
     '
   '';
 
@@ -467,11 +536,11 @@ let
       export TERM=linux
 
       if [ "$USER" == "root" ]; then
-        PROMPT_COLOR="1;31m"
-        PROMPT_SYMBOL="#"
+          PROMPT_COLOR="1;31m"
+          PROMPT_SYMBOL="#"
       else
-        PROMPT_COLOR="1;32m"
-        PROMPT_SYMBOL='%'
+          PROMPT_COLOR="1;32m"
+          PROMPT_SYMBOL='%'
       fi
 
       PS1="\n\[\033[$PROMPT_COLOR\]\w $PROMPT_SYMBOL\[\033[0m\] "
@@ -625,5 +694,69 @@ let
     done
   '';
 
+  # the foo build outputs
+  foo = buildFoo { inherit config pkgs; };
+
+  # dism image bootloader configuration
+  loaderConf = pkgs.writeText "loader-conf" ''
+    timeout 5
+  '';
+
+  # disk image bootloader entry
+  loaderEntry = pkgs.writeText "foo-generation-1.conf" ''
+    title   foo generation 1
+    efi     /EFI/Linux/foo-generation-1.efi
+  '';
+
+  closure = pkgs.closureInfo {
+    rootPaths = [ foo.build.toplevel ];
+  };
+
+  diskImage =
+    pkgs.runCommand "foo.raw"
+      {
+        nativeBuildInputs = [
+          pkgs.systemd
+          pkgs.fakeroot
+          pkgs.dosfstools
+          pkgs.e2fsprogs
+          pkgs.mtools
+        ];
+      }
+      ''
+        mkdir -p repart.d
+
+        cat > repart.d/00-esp.conf <<EOF
+        [Partition]
+        Type=esp
+        Format=vfat
+        SizeMinBytes=200M
+        SizeMaxBytes=200M
+        Label=FOO-ESP
+        CopyFiles=${foo.build.uki}:/EFI/Linux/foo-generation-1.efi
+        CopyFiles=${pkgs.systemd}/lib/systemd/boot/efi/systemd-bootx64.efi:/EFI/BOOT/BOOTX64.EFI
+        CopyFiles=${loaderConf}:/loader/loader.conf
+        CopyFiles=${loaderEntry}:/loader/entries/foo-generation-1.conf
+        EOF
+
+        cat > repart.d/10-root.conf <<EOF
+        [Partition]
+        Type=root-x86-64
+        Format=ext4
+        Label=FOO-ROOT
+        CopyFiles=${closure}/registration:/nix/.registration
+        EOF
+
+        for path in $(cat ${closure}/store-paths); do
+          echo "CopyFiles=$path:/nix/store/''${path#/nix/store/}" >> repart.d/10-root.conf
+        done
+
+        fakeroot systemd-repart \
+          --empty=create \
+          --size=5G \
+          --definitions=repart.d \
+          $out
+      '';
 in
-buildFoo { inherit config pkgs; }
+# our build outputs
+lib.recursiveUpdate foo { build = { inherit diskImage; }; }

@@ -55,15 +55,9 @@ let
       --output $out
   '';
 
-  init = pkgs.writeTextFile {
-    name = "init";
-    text = config.init.commands;
-    executable = true;
-  };
-
   toplevel = pkgs.runCommand "foo-system" { } ''
     mkdir -p $out
-    ln -s ${init} $out/init 
+    ln -s ${config.init.script} $out/init 
     ${lib.concatStringsSep "\n" (map (x: "ln -s ${x.source} $out/${x.name}") config.toplevel.paths)}
   '';
 
@@ -76,3 +70,4 @@ in
     toplevel
     ;
 }
+// config.outputs

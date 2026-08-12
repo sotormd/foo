@@ -5,13 +5,29 @@ let
 in
 {
   schema = {
+    outputs = {
+      inherit _option;
+      description = ''
+        Additional outputs to be available under `build`. The following are
+        always included:
+
+        - `kernel`
+        - `initrd`
+        - `uki`
+        - `toplevel`
+
+        Type: Attrs 
+      '';
+    };
     toplevel = {
       paths = {
         inherit _option;
         description = ''
-          Paths to link under `$closure`, this could be used for
-          things like `$closure/etc` or `$closure/sw`, as needed.
-          `$closure/init` is always included.
+          Paths to link under the system closure, this could be used for
+          things like `etc` or `sw`, as needed. The following are always
+          included:
+
+          - `init`, the PID 1 (init) script
 
           Type: List of attrs with `source` (path) and `name` (string).
         '';
@@ -84,11 +100,12 @@ in
       };
     };
     init = {
-      commands = {
+      script = {
         inherit _option;
         description = ''
-          Commands to run in PID 1 (init). This should include everything
-          required to set up a system, including calling any "activation".
+          Script with commands to run in PID 1 (init). This should include
+          everything required to set up a system. This script is availabe as
+          `$BOOTED_CLOSURE/init`.
 
           Type: String 
         '';

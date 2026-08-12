@@ -1,5 +1,5 @@
 let
-  sources = import ./sources.nix;
+  sources = import ../sources.nix;
 
   pkgs = import (fetchTarball {
     url = "https://github.com/nixos/nixpkgs/archive/${sources.nixpkgs.commit}.tar.gz";
@@ -8,23 +8,43 @@ let
 
   inherit (pkgs) lib;
 
-  buildFoo = import ./build-foo.nix;
+  buildFoo = import ../foo;
 
+  # the foo build outputs
+  foo = buildFoo { inherit config pkgs; };
+
+  # foo configuration
   config = {
-    version = "0.0.1-a";
+
+    # buildFoo foo version
+    version = "0.0.1";
+
+    # extra outputs - foobar adds diskImage
+    outputs = { inherit diskImage; };
+
+    # paths for system closure
     toplevel.paths = [
+
+      # software, like nixos
       {
         source = software;
         name = "sw";
       }
+
+      # etc, like nixos
+      # this is an erofs image
       {
         source = etcErofs;
         name = "etc";
       }
+
+      # activation script, like nixos
       {
         source = activate;
         name = "activate";
       }
+
+      # kernel modules
       {
         source = pkgs.makeModulesClosure {
           rootModules = modules.init;
@@ -34,6 +54,8 @@ let
         name = "kernel-modules";
       }
     ];
+
+    # kernel to use
     kernel = {
       packages = pkgs.linuxPackages;
       params = [
@@ -44,15 +66,18 @@ let
         "ipv6.disable=1"
       ];
     };
+
+    # initrd to use
     initrd = {
       modules = modules.initrd;
       interpreter = "/bin/sh";
       packages = [ pkgs.busybox ];
       commands = initrdCommands;
     };
-    init = {
-      commands = initCommands;
-    };
+
+    # init to use
+    init.script = initScript;
+
   };
 
   # create a PATH from nix packages
@@ -118,8 +143,8 @@ let
             }
         done
     }
-    boot=$(find_label FOO-ESP)
-    root=$(find_label FOO-ROOT)
+    boot=$(find_label FOOBAR-ESP)
+    root=$(find_label FOOBAR-ROOT)
 
     echo initrd: mounting real root
 
@@ -156,7 +181,7 @@ let
   '';
 
   # commands to run as PID 1 (init)
-  initCommands = ''
+  initScript = pkgs.writeScript "init" ''
     #!${sh}
 
     ${busyboxPATH [ ]}
@@ -203,13 +228,12 @@ let
   activate = pkgs.writeScript "activate" ''
     #!${sh}
 
-    umask 0022
-
-    # we use features that busybox doesn't have
     ${busyboxPATH [
       pkgs.util-linux # busybox mount/umount doesn't have --beneath/--recursive
       wrappers.modprobe # wrapped modprobe to look for modules in the right place
     ]}
+
+    umask 0022
 
     if [ "$(id -u)" -ne 0 ]; then
         echo "activate: must be run as root" >&2
@@ -329,58 +353,72 @@ let
     hostname $(cat /etc/hostname)
   '';
 
-  fooRebuild = pkgs.writeScriptBin "foo-rebuild" ''
-    #!${sh}
+  foobarRebuild = pkgs.writeScriptBin "foobar-rebuild" ''
+        #!${sh}
 
-    set -e
+        ${busyboxPATH [ nixPackage ]}
 
-    ${busyboxPATH [ nixPackage ]}
+        set -e
 
-    if [ "$(id -u)" -ne 0 ]; then
-        echo "rebuild: must be run as root" >&2
-        exit 1
-    fi
+        if [ "$(id -u)" -ne 0 ]; then
+            echo rebuild: must be run as root >&2
+            exit 1
+        fi
 
-    if [ -z "$FOO_CONFIG" ]; then
-        echo "environment variable FOO_CONFIG unset" >&2
-        exit 1
-    fi
+        if [ "$1" != "test"  ] && [ "$1" != "boot" ] && [ "$1" != "switch" ]; then
+            echo "rebuild: expected verb: test, boot or switch"
+            exit 1
+        fi
 
-    if ! [ -f "$FOO_CONFIG" ]; then
-        echo "unable to find FOO_CONFIG $FOO_CONFIG" >&2
-        exit 1
-    fi
+        if [ -z "$FOOBAR_CONFIG" ]; then
+            echo rebuild: environment variable FOOBAR_CONFIG unset >&2
+            exit 1
+        fi
 
-    current=$(readlink /nix/var/nix/profiles/foo/system | awk -F- '{ print $2 }')
-    echo rebuild: current generation "$current" is at "$(realpath /nix/var/nix/profiles/foo/system)"
+        if ! [ -f "$FOOBAR_CONFIG" ]; then
+            echo rebuild: unable to find FOOBAR_CONFIG "$FOOBAR_CONFIG" >&2
+            exit 1
+        fi
 
-    echo rebuild: building system closure
-    closure=$(nix build -f "$FOO_CONFIG" build.toplevel --no-link --print-out-paths)
+        current=$(readlink /nix/var/nix/profiles/foobar/system | awk -F- '{ print $2 }')
+        echo rebuild: current generation "$current" is at "$(realpath /nix/var/nix/profiles/foobar/system)"
 
-    echo rebuild: building uki
-    uki=$(nix build -f "$FOO_CONFIG" build.uki --no-link --print-out-paths)
+        echo rebuild: building system closure
+        closure=$(nix build -f "$FOOBAR_CONFIG" build.toplevel --no-link --print-out-paths)
 
-    echo rebuild: adding generation to profile
-    nix-env --profile /nix/var/nix/profiles/foo/system --set "$closure"
-    number=$(readlink /nix/var/nix/profiles/foo/system | awk -F- '{ print $2 }')
+        if [ "$1" = "boot" ] || [ "$1" = "switch" ]; then
 
-    echo rebuild: installing bootloader
+            echo rebuild: building uki
+            uki=$(nix build -f "$FOOBAR_CONFIG" build.uki --no-link --print-out-paths)
 
-    base=$(mktemp -d)
-    cp "$uki" "$base/uki"
-    mv "$base/uki" "/boot/EFI/Linux/foo-generation-$number.efi"
+            echo rebuild: installing system closure to profile
+            nix-env --profile /nix/var/nix/profiles/foobar/system --set "$closure"
+            number=$(readlink /nix/var/nix/profiles/foobar/system | awk -F- '{ print $2 }')
 
-    cat > "/boot/loader/entries/foo-generation-$number.conf" <<EOF
-    title   foo generation $number
-    efi     /EFI/Linux/foo-generation-$number.efi
+            echo rebuild: installing uki to bootloader
+            base=$(mktemp -d)
+            cp "$uki" "$base/uki"
+            mv "$base/uki" "/boot/EFI/Linux/foobar-generation-$number.efi"
+            cat > "/boot/loader/entries/foobar-generation-$number.conf" <<EOF
+    title   foobar generation $number
+    efi     /EFI/Linux/foobar-generation-$number.efi
     EOF
+            rm -rf "$base"
 
-    rm -rf "$base"
+        elif [ "$1" = "test" ]; then
 
-    echo rebuild: starting activation
-    env -i closure="$closure" "$closure/activate"
+            number='<test>'
 
-    echo rebuild: new generation "$number" is at "$closure"
+        fi
+
+        if [ "$1" = "test" ] || [ "$1" = "switch" ]; then
+
+            echo rebuild: starting activation
+            env -i closure="$closure" "$closure/activate"
+
+        fi
+
+        echo rebuild: new generation "$number" is at "$closure"
   '';
 
   # software to include in system closure
@@ -390,7 +428,7 @@ let
     paths = [
 
       nixPackage
-      fooRebuild
+      foobarRebuild
 
       pkgs.git
 
@@ -410,8 +448,10 @@ let
     modprobe = pkgs.writeScriptBin "modprobe" ''
       #!${sh}
 
+      export PATH="${makePATH [ pkgs.kmod ]}"
+
       export MODPROBE_OPTIONS='-d /run/current-system/kernel-modules'
-      ${pkgs.kmod}/bin/modprobe "$@"
+      modprobe "$@"
     '';
     poweroff = pkgs.writeScriptBin "poweroff" ''
       #!${sh}
@@ -466,10 +506,10 @@ let
     fi
 
     # system generations
-    if ! [ -f /nix/var/nix/profiles/foo ]; then
-        mkdir -p /nix/var/nix/profiles/foo
+    if ! [ -f /nix/var/nix/profiles/foobar ]; then
+        mkdir -p /nix/var/nix/profiles/foobar
     fi
-    nix-env --profile /nix/var/nix/profiles/foo/system --set "$(readlink /run/current-system)"
+    nix-env --profile /nix/var/nix/profiles/foobar/system --set "$(readlink /run/current-system)"
 
     # start the nix daemon
     exec unshare -m sh -c '
@@ -493,7 +533,7 @@ let
   etcHostname = pkgs.writeTextFile {
     name = "etc-hostname";
     text = ''
-      foo
+      foobar
     '';
     destination = "/hostname";
   };
@@ -524,10 +564,10 @@ let
   etcOsRelease = pkgs.writeTextFile {
     name = "etc-os-release";
     text = ''
-      ID=foo
-      NAME=foo
-      PRETTY_NAME=foo
-      VENDOR_NAME=foo
+      ID=foobar
+      NAME=foobar
+      PRETTY_NAME=foobar
+      VENDOR_NAME=foobar
     '';
     destination = "/os-release";
   };
@@ -542,7 +582,7 @@ let
 
       export TERM=linux
 
-      if [ "$USER" == "root" ]; then
+      if [ "$USER" = "root" ]; then
           PROMPT_COLOR="1;31m"
           PROMPT_SYMBOL="#"
       else
@@ -701,18 +741,15 @@ let
     done
   '';
 
-  # the foo build outputs
-  foo = buildFoo { inherit config pkgs; };
-
   # dism image bootloader configuration
   loaderConf = pkgs.writeText "loader-conf" ''
     timeout 5
   '';
 
   # disk image bootloader entry
-  loaderEntry = pkgs.writeText "foo-generation-1.conf" ''
-    title   foo generation 1
-    efi     /EFI/Linux/foo-generation-1.efi
+  loaderEntry = pkgs.writeText "foobar-generation-1.conf" ''
+    title   foobar generation 1
+    efi     /EFI/Linux/foobar-generation-1.efi
   '';
 
   closure = pkgs.closureInfo {
@@ -720,7 +757,7 @@ let
   };
 
   diskImage =
-    pkgs.runCommand "foo.raw"
+    pkgs.runCommand "foobar.raw"
       {
         nativeBuildInputs = [
           pkgs.systemd
@@ -739,18 +776,18 @@ let
         Format=vfat
         SizeMinBytes=200M
         SizeMaxBytes=200M
-        Label=FOO-ESP
-        CopyFiles=${foo.build.uki}:/EFI/Linux/foo-generation-1.efi
+        Label=FOOBAR-ESP
+        CopyFiles=${foo.build.uki}:/EFI/Linux/foobar-generation-1.efi
         CopyFiles=${pkgs.systemd}/lib/systemd/boot/efi/systemd-bootx64.efi:/EFI/BOOT/BOOTX64.EFI
         CopyFiles=${loaderConf}:/loader/loader.conf
-        CopyFiles=${loaderEntry}:/loader/entries/foo-generation-1.conf
+        CopyFiles=${loaderEntry}:/loader/entries/foobar-generation-1.conf
         EOF
 
         cat > repart.d/10-root.conf <<EOF
         [Partition]
         Type=root-x86-64
         Format=ext4
-        Label=FOO-ROOT
+        Label=FOOBAR-ROOT
         CopyFiles=${closure}/registration:/nix/.registration
         EOF
 
@@ -765,5 +802,4 @@ let
           $out
       '';
 in
-# our build outputs
-lib.recursiveUpdate foo { build = { inherit diskImage; }; }
+foo

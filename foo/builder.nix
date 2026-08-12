@@ -57,7 +57,7 @@ let
 
   toplevel = pkgs.runCommand "foo-system" { } ''
     mkdir -p $out
-    ln -s ${config.init.script} $out/init 
+    ln -s ${config.toplevel.init} $out/init 
     ${lib.concatStringsSep "\n" (map (x: "ln -s ${x.source} $out/${x.name}") config.toplevel.paths)}
   '';
 

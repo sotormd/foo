@@ -23,37 +23,45 @@ let
     outputs = { inherit diskImage; };
 
     # paths for system closure
-    toplevel.paths = [
+    toplevel = {
 
-      # software, like nixos
-      {
-        source = software;
-        name = "sw";
-      }
+      # init to use
+      init = initScript;
 
-      # etc, like nixos
-      # this is an erofs image
-      {
-        source = etcErofs;
-        name = "etc";
-      }
+      # other paths
+      paths = [
 
-      # activation script, like nixos
-      {
-        source = activate;
-        name = "activate";
-      }
+        # software, like nixos
+        {
+          source = software;
+          name = "sw";
+        }
 
-      # kernel modules
-      {
-        source = pkgs.makeModulesClosure {
-          rootModules = modules.init;
-          firmware = [ pkgs.emptyDirectory ];
-          kernel = config.kernel.packages.kernel.modules;
-        };
-        name = "kernel-modules";
-      }
-    ];
+        # etc, like nixos
+        # this is an erofs image
+        {
+          source = etcErofs;
+          name = "etc";
+        }
+
+        # activation script, like nixos
+        {
+          source = activate;
+          name = "activate";
+        }
+
+        # kernel modules
+        {
+          source = pkgs.makeModulesClosure {
+            rootModules = modules.init;
+            firmware = [ pkgs.emptyDirectory ];
+            kernel = config.kernel.packages.kernel.modules;
+          };
+          name = "kernel-modules";
+        }
+      ];
+
+    };
 
     # kernel to use
     kernel = {
@@ -74,9 +82,6 @@ let
       packages = [ pkgs.busybox ];
       commands = initrdCommands;
     };
-
-    # init to use
-    init.script = initScript;
 
   };
 

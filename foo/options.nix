@@ -20,6 +20,16 @@ in
       '';
     };
     toplevel = {
+      init = {
+        inherit _option;
+        description = ''
+          File to run as PID 1 (init). This should include everything required
+          to set up a system. This is added to toplevel under `init` and is
+          availabe as `$BOOTED_CLOSURE/init` in the initrd.
+
+          Type: Path
+        '';
+      };
       paths = {
         inherit _option;
         description = ''
@@ -27,7 +37,7 @@ in
           things like `etc` or `sw`, as needed. The following are always
           included:
 
-          - `init`, the PID 1 (init) script
+          - `init`, the PID 1 (init)
 
           Type: List of attrs with `source` (path) and `name` (string).
         '';
@@ -96,18 +106,6 @@ in
           `$BOOTED_CLOSURE`. The init is available as `$BOOTED_CLOSURE/init`.
 
           Type: String
-        '';
-      };
-    };
-    init = {
-      script = {
-        inherit _option;
-        description = ''
-          Script with commands to run in PID 1 (init). This should include
-          everything required to set up a system. This script is availabe as
-          `$BOOTED_CLOSURE/init`.
-
-          Type: String 
         '';
       };
     };

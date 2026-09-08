@@ -746,7 +746,7 @@ let
     done
   '';
 
-  # dism image bootloader configuration
+  # disk image bootloader configuration
   loaderConf = pkgs.writeText "loader-conf" ''
     timeout 5
   '';

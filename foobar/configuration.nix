@@ -57,7 +57,7 @@ let
       toplevel = {
 
         # init to use
-        init = final.initScript;
+        inherit (final) init;
 
         # other paths
         paths = [
@@ -225,7 +225,7 @@ let
     '';
 
     # commands to run as PID 1 (init)
-    initScript = final.pkgs.writeScript "init" ''
+    initCommands = ''
       #!${final.sh}
 
       ${final.busyboxPATH [ ]}
@@ -258,6 +258,7 @@ let
 
       exec ${final.stub}
     '';
+    init = final.pkgs.writeScript "init" final.initCommands;
 
     services = [
       {
@@ -282,7 +283,7 @@ let
     # 3. mounting erofs /etc (atomic, idempotent) while keeping runtime state
     # 4. creating passwd/group/shadow (idempotent)
     # 5. setting up hostname (idempotent)
-    activate = final.pkgs.writeScript "activate" ''
+    activateCommands = ''
       #!${final.sh}
 
       ${final.busyboxPATH [
@@ -409,8 +410,11 @@ let
       # set system hostname
       hostname $(cat /etc/hostname)
     '';
+    activate = final.pkgs.writeScript "activate" final.activateCommands;
 
-    foobarRebuild = final.pkgs.writeScriptBin "foobar-rebuild" ''
+    # foobar-rebuild
+    # rebuild a new system generation
+    foobarRebuildCommands = ''
           #!${final.sh}
 
           ${final.busyboxPATH [ final.nixPackage ]}
@@ -477,27 +481,29 @@ let
 
           echo rebuild: new generation "$number" is at "$closure"
     '';
+    foobarRebuild = final.pkgs.writeScriptBin "foobar-rebuild" final.foobarRebuildCommands;
 
     # software to include in system closure
     # basically the same as nixos /run/current-system/sw
+    softwarePaths = [
+
+      final.nixPackage
+      final.foobarRebuild
+
+      final.pkgs.git
+
+      final.pkgs.fastfetch
+      final.pkgs.tmux
+
+      (final.lib.hiPrio final.wrappers.modprobe) # busybox provides modprobe
+      final.wrappers.poweroff
+
+      final.pkgs.busybox
+
+    ];
     software = final.pkgs.buildEnv {
       name = "software";
-      paths = [
-
-        final.nixPackage
-        final.foobarRebuild
-
-        final.pkgs.git
-
-        final.pkgs.fastfetch
-        final.pkgs.tmux
-
-        (final.lib.hiPrio final.wrappers.modprobe) # busybox provides modprobe
-        final.wrappers.poweroff
-
-        final.pkgs.busybox
-
-      ];
+      paths = final.softwarePaths;
     };
 
     # wrapped packages
@@ -523,35 +529,36 @@ let
     nixPackage = final.pkgs.lix;
 
     # nix package manager configuration
+    nixConfText = ''
+      accept-flake-config = false
+      allow-import-from-derivation = false
+      allowed-users = @wheel
+      auto-optimise-store = true
+      builders = 
+      cores = 0
+      experimental-features = nix-command flakes
+      flake-registry = 
+      max-jobs = auto
+      require-sigs = true
+      sandbox = true
+      sandbox-fallback = false
+      substituters = https://cache.nixos.org/
+      system-features = nixos-test benchmark big-parallel kvm
+      trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+      trusted-substituters = 
+      trusted-users = root
+      use-xdg-base-directories = true
+      warn-dirty = false
+      ssl-cert-file = /etc/ssl/certs/ca-bundle.crt
+    '';
     nixConf = final.pkgs.writeTextFile {
       name = "etc-nix-conf";
-      text = ''
-        accept-flake-config = false
-        allow-import-from-derivation = false
-        allowed-users = @wheel
-        auto-optimise-store = true
-        builders = 
-        cores = 0
-        experimental-features = nix-command flakes
-        flake-registry = 
-        max-jobs = auto
-        require-sigs = true
-        sandbox = true
-        sandbox-fallback = false
-        substituters = https://cache.nixos.org/
-        system-features = nixos-test benchmark big-parallel kvm
-        trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
-        trusted-substituters = 
-        trusted-users = root
-        use-xdg-base-directories = true
-        warn-dirty = false
-        ssl-cert-file = /etc/ssl/certs/ca-bundle.crt
-      '';
+      text = final.nixConfText;
       destination = "/nix/nix.conf";
     };
 
     # nix daemon script
-    nixDaemon = final.pkgs.writeScript "nix-daemon" ''
+    nixDaemonCommands = ''
       #!${final.sh}
 
       ${final.busyboxPATH [ final.nixPackage ]}
@@ -574,9 +581,10 @@ let
           exec nix-daemon
       '
     '';
+    nixDaemon = final.pkgs.writeScript "nix-daemon" final.nixDaemonCommands;
 
     # networking script
-    networking = final.pkgs.writeScript "networking" ''
+    networkingCommands = ''
       #!${final.sh}
 
       ${final.busyboxPATH [ ]}
@@ -584,76 +592,81 @@ let
       ip link set eth0 up
       udhcpc -i eth0
     '';
+    networking = final.pkgs.writeScript "networking" final.networkingCommands;
 
     # /etc/hostname hostname
     # this is loaded using hostname
+    etcHostnameText = ''
+      foobar
+    '';
     etcHostname = final.pkgs.writeTextFile {
       name = "etc-hostname";
-      text = ''
-        foobar
-      '';
+      text = final.etcHostnameText;
       destination = "/hostname";
     };
 
     # nsswitch config
+    etcNsswitchConfText = ''
+      passwd:    files
+      group:     files
+      shadow:    files
+
+      hosts:     files dns
+      networks:  files
+
+      ethers:    files
+      services:  files
+      protocols: files
+      rpc:       files
+
+      subuid:    files
+      subgid:    files
+    '';
     etcNsswitchConf = final.pkgs.writeTextFile {
       name = "etc-nsswitch-conf";
-      text = ''
-        passwd:    files
-        group:     files
-        shadow:    files
-
-        hosts:     files dns
-        networks:  files
-
-        ethers:    files
-        services:  files
-        protocols: files
-        rpc:       files
-
-        subuid:    files
-        subgid:    files
-      '';
+      text = final.etcNsswitchConfText;
       destination = "/nsswitch.conf";
     };
 
     # os-release!
+    etcOsReleaseText = ''
+      ID=foobar
+      NAME=foobar
+      PRETTY_NAME=foobar
+      VENDOR_NAME=foobar
+    '';
     etcOsRelease = final.pkgs.writeTextFile {
       name = "etc-os-release";
-      text = ''
-        ID=foobar
-        NAME=foobar
-        PRETTY_NAME=foobar
-        VENDOR_NAME=foobar
-      '';
+      text = final.etcOsReleaseText;
       destination = "/os-release";
     };
 
     # this is loaded when a user logs in
     # PATH can be set to just /run/current-system/sw/bin
+    etcProfileText = ''
+      export PATH=/run/current-system/sw/bin
+
+      if [ "$USER" = "root" ]; then
+          PROMPT_COLOR="1;31m"
+          PROMPT_SYMBOL="#"
+      else
+          PROMPT_COLOR="1;32m"
+          PROMPT_SYMBOL='%'
+      fi
+
+      PS1="\n\[\033[$PROMPT_COLOR\]\w $PROMPT_SYMBOL\[\033[0m\] "
+
+      export SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt
+
+      export TERM=linux
+
+      export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+
+      umask 0077
+    '';
     etcProfile = final.pkgs.writeTextFile {
       name = "etc-profile";
-      text = ''
-        export PATH=/run/current-system/sw/bin
-
-        if [ "$USER" = "root" ]; then
-            PROMPT_COLOR="1;31m"
-            PROMPT_SYMBOL="#"
-        else
-            PROMPT_COLOR="1;32m"
-            PROMPT_SYMBOL='%'
-        fi
-
-        PS1="\n\[\033[$PROMPT_COLOR\]\w $PROMPT_SYMBOL\[\033[0m\] "
-
-        export SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt
-
-        export TERM=linux
-
-        export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-
-        umask 0077
-      '';
+      text = final.etcProfileText;
       destination = "/profile";
     };
 
@@ -663,16 +676,17 @@ let
     '';
 
     # final etc tree
+    etcPaths = [
+      final.nixConf
+      final.etcHostname
+      final.etcNsswitchConf
+      final.etcOsRelease
+      final.etcProfile
+      final.etcSsl
+    ];
     etc = final.pkgs.symlinkJoin {
       name = "etc";
-      paths = [
-        final.nixConf
-        final.etcHostname
-        final.etcNsswitchConf
-        final.etcOsRelease
-        final.etcProfile
-        final.etcSsl
-      ];
+      paths = final.etcPaths;
     };
 
     # erofs etc image
@@ -689,7 +703,7 @@ let
 
     # /etc/passwd
     # this is loaded separately
-    passwd = final.pkgs.writeText "etc-passwd" ''
+    passwdText = ''
       root:x:0:0:System administrator:/root:/run/current-system/sw/bin/ash
       foo:x:1000:1000:Standard user:/home/foo:/run/current-system/sw/bin/ash
       nobody:x:65534:65534:Unprivileged account (don't use!):/var/empty:/run/current-system/sw/bin/nologin
@@ -726,10 +740,11 @@ let
       nixbld31:x:30031:30000:Nix build user 31:/var/empty:/run/current-system/sw/bin/nologin
       nixbld32:x:30032:30000:Nix build user 32:/var/empty:/run/current-system/sw/bin/nologin
     '';
+    passwd = final.pkgs.writeText "etc-passwd" final.passwdText;
 
     # /etc/group
     # this is loaded separately
-    group = final.pkgs.writeText "etc-group" ''
+    groupText = ''
       root:x:0:
       wheel:x:1:foo
       tty:x:3:
@@ -738,45 +753,48 @@ let
       nogroup:x:65534:
       nixbld:x:30000:nixbld1,nixbld10,nixbld11,nixbld12,nixbld13,nixbld14,nixbld15,nixbld16,nixbld17,nixbld18,nixbld19,nixbld2,nixbld20,nixbld21,nixbld22,nixbld23,nixbld24,nixbld25,nixbld26,nixbld27,nixbld28,nixbld29,nixbld3,nixbld30,nixbld31,nixbld32,nixbld4,nixbld5,nixbld6,nixbld7,nixbld8,nixbld9
     '';
+    group = final.pkgs.writeText "etc-group" final.groupText;
 
     # default /etc/shadow
     # this is loaded separately
     # this is used ONLY If /persist/secrets/shadow doesn't exist
     # user: foo  ; password: foo
     # user: root ; password: root
-    shadow = final.pkgs.writeText "etc-shadow-default" ''
+    shadowText = ''
       root:$6$miCeoFcigmVhZ0HR$5fM9is80q/wYAMs0TWrw6tmM3FoIIeL0eprPSL2wRd/apIEWd0K1jxCspRQVwbxOKC/ykHBDdWs0cSvwfwbgK1:1::::::
       foo:$6$G7hka6E6pPmHnhQH$QgY/sSCFzEnW17vmdG0kkJb4Eve/sh6lQg/K8OcsKFfWVaTWwdFjBExwFvhhfvvki1ZYUHJo7v.IFOFFNBHgJ.:1::::::
       nobody:!:1::::::
     '';
+    shadow = final.pkgs.writeText "etc-shadow-default" final.shadowText;
 
     # 1. reap zombies
     # 2. handle poweroff
+    stubSource = ''
+      #include <signal.h>
+      #include <sys/reboot.h>
+      #include <unistd.h>
+
+      void term(int sig)
+      {
+          reboot(RB_POWER_OFF);
+      }
+
+      int main()
+      {
+          signal(SIGCHLD, SIG_IGN);
+          signal(SIGTERM, term);
+
+          for (;;)
+              pause();
+      }
+    '';
     stub = final.pkgs.stdenv.mkDerivation {
       pname = "stub";
       version = "0";
 
       dontUnpack = true;
 
-      src = final.pkgs.writeText "stub.c" ''
-        #include <signal.h>
-        #include <sys/reboot.h>
-        #include <unistd.h>
-
-        void term(int sig)
-        {
-            reboot(RB_POWER_OFF);
-        }
-
-        int main()
-        {
-            signal(SIGCHLD, SIG_IGN);
-            signal(SIGTERM, term);
-
-            for (;;)
-                pause();
-        }
-      '';
+      src = final.pkgs.writeText "stub.c" final.stubSource;
 
       buildPhase = ''
         $CC $src -O2 -o stub
@@ -791,7 +809,7 @@ let
     # using busybox getty and login because
     # the ones from util-linux and shadow use PAM
     # we dont use PAM
-    getty = final.pkgs.writeScript "getty" ''
+    gettyCommands = ''
       #!${final.sh}
 
       ${final.busyboxPATH [ ]}
@@ -810,6 +828,7 @@ let
 
       wait
     '';
+    getty = final.pkgs.writeScript "getty" final.gettyCommands;
 
     # disk image bootloader configuration
     loaderConf = final.pkgs.writeText "loader-conf" ''

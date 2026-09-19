@@ -50,7 +50,7 @@ let
       --linux ${kernel}/${kernel.target} \
       --uname ${config.kernel.packages.kernel.version} \
       --initrd ${initrd}/initrd \
-      --cmdline "${builtins.concatStringsSep " " config.kernel.params}"} \
+      --cmdline "${builtins.concatStringsSep " " config.kernel.params}" \
       --os-release "" \
       --output $out
   '';

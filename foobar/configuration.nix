@@ -1,859 +1,876 @@
 let
-  configuration =
+  fix =
+    f:
+    let
+      x = f x;
+    in
+    x;
 
-    {
-      extraConfiguration ? { },
-    }:
+  extends =
+    overlay: f: final:
+    let
+      prev = f final;
+    in
+    prev // overlay final prev;
 
-    rec {
+  makeExtensible =
+    rattrs:
+    fix (
+      final:
+      (rattrs final)
+      // {
+        extend = f: makeExtensible (extends f rattrs);
+      }
+    );
 
-      sources = {
-        nixpkgs = {
-          commit = "e554fab72f81915600f3f449b786fd9af40439a5";
-          hash = "sha256-ZKhUe/2IJUq1JhKxKMu8rbkgSGmPP2ZCqlIPn40aGCM=";
-        };
+  configuration = makeExtensible (final: {
+
+    sources = {
+      nixpkgs = {
+        commit = "e554fab72f81915600f3f449b786fd9af40439a5";
+        hash = "sha256-ZKhUe/2IJUq1JhKxKMu8rbkgSGmPP2ZCqlIPn40aGCM=";
       };
+    };
 
-      pkgs = import (fetchTarball {
-        url = "https://github.com/nixos/nixpkgs/archive/${sources.nixpkgs.commit}.tar.gz";
-        sha256 = sources.nixpkgs.hash;
-      }) { system = "x86_64-linux"; };
+    pkgs = import (fetchTarball {
+      url = "https://github.com/nixos/nixpkgs/archive/${final.sources.nixpkgs.commit}.tar.gz";
+      sha256 = final.sources.nixpkgs.hash;
+    }) { system = "x86_64-linux"; };
 
-      inherit (pkgs) lib;
+    inherit (final.pkgs) lib;
 
-      buildFoo = import ../foo;
+    buildFoo = import ../foo;
 
-      # the foo build outputs
-      foo = buildFoo { inherit config pkgs; };
+    # the foo build outputs
+    foo = final.buildFoo { inherit (final) config pkgs; };
 
-      # foo configuration
-      config = {
+    # foo configuration
+    config = {
 
-        # buildFoo foo version
-        version = "0.0.1";
+      # buildFoo foo version
+      version = "0.0.1";
 
-        # extra outputs - foobar adds diskImage
-        outputs = { inherit diskImage; };
+      # extra outputs - foobar adds diskImage
+      outputs = { inherit (final) diskImage; };
 
-        # paths for system closure
-        toplevel = {
+      # paths for system closure
+      toplevel = {
 
-          # init to use
-          init = initScript;
+        # init to use
+        init = final.initScript;
 
-          # other paths
-          paths = [
-
-            # /run/current-system/sw
-            # software, like nixos /run/current-system/sw
-            {
-              source = software;
-              name = "sw";
-            }
-
-            # /run/current-system/etc
-            # etc, like nixos /run/current-system/etc
-            # this is an erofs image
-            {
-              source = etcErofs;
-              name = "etc";
-            }
-
-            # /run/current-system/activate
-            # activation script, like nixos /run/current-system/activate
-            {
-              source = activate;
-              name = "activate";
-            }
-
-            # /run/current-system/kernel-modules
-            # kernel modules, like nixos /run/current-system/kernel-modules
-            {
-              source = pkgs.makeModulesClosure {
-                rootModules = modules.init;
-                firmware = [ pkgs.emptyDirectory ];
-                kernel = config.kernel.packages.kernel.modules;
-              };
-              name = "kernel-modules";
-            }
-
-          ];
-
-        };
-
-        # kernel to use
-        kernel = {
-          packages = pkgs.linuxPackages;
-          params = [
-            "console=ttyS0"
-            "earlycon=uart8250,io,0x3f8,115200"
-            "quiet"
-            "loglevel=0"
-            "ipv6.disable=1"
-          ];
-        };
-
-        # initrd to use
-        initrd = {
-          modules = modules.initrd;
-          interpreter = "/bin/sh";
-          packages = [ pkgs.busybox ];
-          commands = initrdCommands;
-        };
-
-      };
-
-      # create a PATH from nix packages
-      makePATH = packages: lib.concatStringsSep ":" (map (x: "${x}/bin") packages);
-      busyboxPATH = extra: "export PATH=\"${makePATH (extra ++ [ pkgs.busybox ])}\"";
-
-      # load kernel modules using modprobe
-      # should use wrapped modprobe from PATH
-      loadModules = modules: lib.concatStringsSep "\n" (map (x: "modprobe \"${x}\"") modules);
-
-      # sh for most scripts
-      sh = lib.getExe' pkgs.busybox "sh";
-
-      # kernel modules that we need
-      # adding things here will add it to respective makeModulesClosure
-      # and also import them using loadModules
-      modules = {
-        initrd = [
-          "ahci"
-          "sd_mod"
-          "ext4"
-          "vfat"
-          "nls_cp437"
-          "nls_iso8859-1"
-        ];
-        init = [
-
-          # required for /etc
-          "erofs"
-          "overlay"
-
-          # required for networking
-          "virtio"
-          "virtio_net"
-          "virtio_pci"
-          "af_packet"
-
-          # graphics
-          "virtio_gpu"
-
-        ];
-      };
-
-      # commands to run in initrd
-      initrdCommands = ''
-        printf '\033[0m\033[39;49m\033[H\033[2J'
-        printf '\033[2J\033[H\033[0m\033[1;32m--initrd--\033[0m\n'
-
-        echo initrd: creating basic filesystems
-        mkdir -p /proc /sys /dev
-        mount -t proc proc /proc
-        mount -t sysfs sysfs /sys
-        mount -t devtmpfs devtmpfs /dev
-
-        echo initrd: load kernel modules
-        ${loadModules modules.initrd}
-
-        echo initrd: finding real root
-        find_label() {
-            label="$1"
-
-            for dev in /dev/*; do
-                blkid "$dev" 2>/dev/null | grep -q "LABEL=\"$label\"" && {
-                    echo "$dev"
-                    return
-                }
-            done
-        }
-        boot=$(find_label FOOBAR-ESP)
-        root=$(find_label FOOBAR-ROOT)
-
-        echo initrd: mounting real root
-
-        # tmpfs rootfs
-        mkdir -p /root
-        mount -t tmpfs tmpfs /root
-
-        # persistent disk
-        mkdir -p /root/persist
-        mount -t ext4 "$root" /root/persist
-
-        # boot
-        mkdir -p /root/boot
-        mount -t vfat "$boot" /root/boot
-
-        # nix store
-        mkdir -p /root/nix
-        mount -o bind /root/persist/nix /root/nix
-        mount -o bind /root/nix/store /root/nix/store
-        mount -o remount,ro,bind,nosuid,nodev /root/nix/store
-
-        # home
-        mkdir -p /root/persist/home
-        mkdir -p /root/home
-        mount -o bind,nosuid,nodev /root/persist/home /root/home
-
-        # var
-        mkdir -p /root/persist/var
-        mkdir -p /root/var
-        mount -o bind,nosuid,nodev /root/persist/var /root/var
-
-        echo initrd: switching to real root
-        exec switch_root /root "$BOOTED_CLOSURE/init"
-      '';
-
-      # commands to run as PID 1 (init)
-      initScript = pkgs.writeScript "init" ''
-        #!${sh}
-
-        ${busyboxPATH [ ]}
-
-        printf '\033[0m\033[1;32m--init--\033[0m\n'
-
-        if [ -z "$BOOTED_CLOSURE" ]; then
-            echo init: initrd did not provide BOOTED_CLOSURE >&2
-            exit 1
-        fi
-
-        if ! [ -d "$BOOTED_CLOSURE" ]; then
-            echo init: unable to find BOOTED_CLOSURE "$BOOTED_CLOSURE" >&2
-            exit 1
-        fi
-
-        echo init: starting activation
-
-        env -i closure="$BOOTED_CLOSURE" "$BOOTED_CLOSURE/activate"
-        ln -sfn "$BOOTED_CLOSURE" /run/booted-system
-        unset BOOTED_CLOSURE
-
-        ${builtins.concatStringsSep "\n" (
-          map (x: ''
-            echo init: starting ${x.name}
-            mkdir -p /var/services/${x.name}
-            env -i ${x.exec} >/var/services/${x.name}/stdout 2>/var/services/${x.name}/stderr &
-          '') services
-        )}
-
-        exec ${stub}
-      '';
-
-      services = [
-        {
-          name = "networking";
-          exec = networking;
-        }
-        {
-          name = "nix-daemon";
-          exec = nixDaemon;
-        }
-        {
-          name = "getty";
-          exec = getty;
-        }
-      ];
-
-      # system generation activation
-      # this should be possible to re-run during runtime
-      # handles
-      # 1. creating basic filesystems (idempotent)
-      # 2. link system closure (atomic, idempotent)
-      # 3. mounting erofs /etc (atomic, idempotent) while keeping runtime state
-      # 4. creating passwd/group/shadow (idempotent)
-      # 5. setting up hostname (idempotent)
-      activate = pkgs.writeScript "activate" ''
-        #!${sh}
-
-        ${busyboxPATH [
-          pkgs.util-linux # busybox mount/umount doesn't have --beneath/--recursive
-          wrappers.modprobe # wrapped modprobe to look for modules in the right place
-        ]}
-
-        umask 0022
-
-        if [ "$(id -u)" -ne 0 ]; then
-            echo "activate: must be run as root" >&2
-            exit 1
-        fi
-
-        # create and mount filesystems
-        # if not already mounted
-        mount_if_not_mounted() {
-            src="$1"
-            dst="$2"
-            shift 2
-
-            if ! grep -qs " $dst " /proc/self/mountinfo; then
-                mkdir -p "$dst"
-                mount "$@" "$src" "$dst"
-            fi
-        }
-
-        # create and move mounts
-        move_mount() {
-            src="$1"
-            dst="$2"
-
-            if ! grep -qs " $dst " /proc/self/mountinfo; then
-                mkdir -p "$dst"
-                mount --move "$src" "$dst"
-            else
-                mount --move --beneath "$src" "$dst"
-                umount --lazy --recursive "$dst"
-            fi
-        }
-
-        echo activate: creating basic filesystems
-
-        # mount basic filesystems
-        mount_if_not_mounted devtmpfs /dev -o 'nosuid,strictatime,mode=755,size=5%' -t devtmpfs
-        mount_if_not_mounted devpts /dev/pts -o 'nosuid,noexec,mode=620,ptmxmode=0666,gid=3' -t devpts
-        mount_if_not_mounted tmpfs /dev/shm -o 'nosuid,nodev,strictatime,mode=1777,size=50%' -t tmpfs
-        mount_if_not_mounted proc /proc -o 'nosuid,noexec,nodev' -t proc
-        mount_if_not_mounted tmpfs /run -o 'nosuid,nodev,strictatime,mode=755,size=25%' -t tmpfs
-        mount_if_not_mounted sysfs /sys -o 'nosuid,noexec,nodev' -t sysfs
-        mount_if_not_mounted tmpfs /tmp -o 'nosuid,noexec,nodev' -t tmpfs
-
-        # create basic filesystems
-        mkdir -p /var/tmp /var/empty /var/services
-        chmod 1777 /var/tmp
-        chmod 755 /var/empty
-        chmod 750 /var/services
-
-        echo activate: linking system closure
-
-        ln -sfn "$closure" /run/current-system
-
-        echo activate: loading kernel modules
-
-        ${loadModules modules.init}
-        cat "${lib.getExe wrappers.modprobe}" > /proc/sys/kernel/modprobe
-
-        echo activate: setting up etc
-
-        # etc lowerdir
-        # /run/etc.next/.lower should be free after the mount --move from last time
-        mount_if_not_mounted /run/current-system/etc /run/etc.next/.lower -t erofs
-
-        # move lowerdir
-        move_mount /run/etc.next/.lower /run/etc/.lower
-
-        # we dont want to replace current upper changes
-        mount_if_not_mounted tmpfs /run/etc/.rw -t tmpfs
-        mkdir -p /run/etc/.rw/upper
-        mkdir -p /run/etc/.rw/work
-
-        # final overlay
-        # /run/etc.next/.overlay should be free after the mount --move from last time
-        #
-        # overlayfs will warn about using upperdir,workdir on two mounts
-        # this is fine because previous overlay is unmounted shortly afterwards
-        mount_if_not_mounted overlay /run/etc.next/.overlay -o lowerdir=/run/etc/.lower,upperdir=/run/etc/.rw/upper,workdir=/run/etc/.rw/work -t overlay
-
-        # move overlay
-        move_mount /run/etc.next/.overlay /etc
-
-        echo activate: setting up users
-
-        # shadow 
-        if [ -f /persist/secrets/shadow ]; then 
-            cat /persist/secrets/shadow > /etc/shadow
-        else
-            # use default shadow file if secret is not found
-            cat ${shadow} > /etc/shadow 
-        fi
-
-        # users and groups
-        cat ${passwd} > /etc/passwd
-        cat ${group} > /etc/group
-
-        # permissions and ownership
-        chmod 644 /etc/passwd
-        chmod 644 /etc/group
-        chmod 640 /etc/shadow
-        chown root:root /etc/passwd
-        chown root:root /etc/group
-        chown root:shadow /etc/shadow
-
-        # create user homes
-        mkdir -p /root
-        chown root:root /root
-        chmod 700 /root
-        mkdir -p /home/foo
-        chown foo:foo /home/foo
-        chmod 700 /home/foo
-
-        echo activate: setting up hostname
-
-        # set system hostname
-        hostname $(cat /etc/hostname)
-      '';
-
-      foobarRebuild = pkgs.writeScriptBin "foobar-rebuild" ''
-            #!${sh}
-
-            ${busyboxPATH [ nixPackage ]}
-
-            set -e
-
-            if [ "$(id -u)" -ne 0 ]; then
-                echo rebuild: must be run as root >&2
-                exit 1
-            fi
-
-            if [ "$1" != "test"  ] && [ "$1" != "boot" ] && [ "$1" != "switch" ]; then
-                echo "rebuild: expected verb: test, boot or switch"
-                exit 1
-            fi
-
-            if [ -z "$FOOBAR_CONFIG" ]; then
-                echo rebuild: environment variable FOOBAR_CONFIG unset >&2
-                exit 1
-            fi
-
-            if ! [ -f "$FOOBAR_CONFIG" ]; then
-                echo rebuild: unable to find FOOBAR_CONFIG "$FOOBAR_CONFIG" >&2
-                exit 1
-            fi
-
-            current=$(readlink /nix/var/nix/profiles/foobar/system | awk -F- '{ print $2 }')
-            echo rebuild: current generation "$current" is at "$(realpath /nix/var/nix/profiles/foobar/system)"
-
-            echo rebuild: building system closure
-            closure=$(nix build -f "$FOOBAR_CONFIG" build.toplevel --no-link --print-out-paths)
-
-            if [ "$1" = "boot" ] || [ "$1" = "switch" ]; then
-
-                echo rebuild: building uki
-                uki=$(nix build -f "$FOOBAR_CONFIG" build.uki --no-link --print-out-paths)
-
-                echo rebuild: installing system closure to profile
-                nix-env --profile /nix/var/nix/profiles/foobar/system --set "$closure"
-                number=$(readlink /nix/var/nix/profiles/foobar/system | awk -F- '{ print $2 }')
-
-                echo rebuild: installing uki to bootloader
-                base=$(mktemp -d)
-                cp "$uki" "$base/uki"
-                mv "$base/uki" "/boot/EFI/Linux/foobar-generation-$number.efi"
-                cat > "/boot/loader/entries/foobar-generation-$number.conf" <<EOF
-        title   foobar generation $number
-        efi     /EFI/Linux/foobar-generation-$number.efi
-        EOF
-                rm -rf "$base"
-
-            elif [ "$1" = "test" ]; then
-
-                number='<test>'
-
-            fi
-
-            if [ "$1" = "test" ] || [ "$1" = "switch" ]; then
-
-                echo rebuild: starting activation
-                env -i closure="$closure" "$closure/activate"
-
-            fi
-
-            echo rebuild: new generation "$number" is at "$closure"
-      '';
-
-      # software to include in system closure
-      # basically the same as nixos /run/current-system/sw
-      software = pkgs.buildEnv {
-        name = "software";
+        # other paths
         paths = [
 
-          nixPackage
-          foobarRebuild
+          # /run/current-system/sw
+          # software, like nixos /run/current-system/sw
+          {
+            source = final.software;
+            name = "sw";
+          }
 
-          pkgs.git
+          # /run/current-system/etc
+          # etc, like nixos /run/current-system/etc
+          # this is an erofs image
+          {
+            source = final.etcErofs;
+            name = "etc";
+          }
 
-          pkgs.fastfetch
-          pkgs.tmux
+          # /run/current-system/activate
+          # activation script, like nixos /run/current-system/activate
+          {
+            source = final.activate;
+            name = "activate";
+          }
 
-          (lib.hiPrio wrappers.modprobe) # busybox provides modprobe
-          wrappers.poweroff
+          # /run/current-system/kernel-modules
+          # kernel modules, like nixos /run/current-system/kernel-modules
+          {
+            source = final.pkgs.makeModulesClosure {
+              rootModules = final.modules.init;
+              firmware = [ final.pkgs.emptyDirectory ];
+              kernel = final.config.kernel.packages.kernel.modules;
+            };
+            name = "kernel-modules";
+          }
 
-          pkgs.busybox
+        ];
 
+      };
+
+      # kernel to use
+      kernel = {
+        packages = final.pkgs.linuxPackages;
+        params = [
+          "console=ttyS0"
+          "earlycon=uart8250,io,0x3f8,115200"
+          "quiet"
+          "loglevel=0"
+          "ipv6.disable=1"
         ];
       };
 
-      # wrapped packages
-      wrappers = {
-        modprobe = pkgs.writeScriptBin "modprobe" ''
-          #!${sh}
-
-          export PATH="${makePATH [ pkgs.kmod ]}"
-
-          export MODPROBE_OPTIONS='-d /run/current-system/kernel-modules'
-          modprobe "$@"
-        '';
-        poweroff = pkgs.writeScriptBin "poweroff" ''
-          #!${sh}
-
-          ${busyboxPATH [ ]}
-
-          kill -TERM 1
-        '';
+      # initrd to use
+      initrd = {
+        modules = final.modules.initrd;
+        interpreter = "/bin/sh";
+        packages = [ final.pkgs.busybox ];
+        commands = final.initrdCommands;
       };
 
-      # nix package manager implementation
-      nixPackage = pkgs.lix;
+    };
 
-      # nix package manager configuration
-      nixConf = pkgs.writeTextFile {
-        name = "etc-nix-conf";
-        text = ''
-          accept-flake-config = false
-          allow-import-from-derivation = false
-          allowed-users = @wheel
-          auto-optimise-store = true
-          builders = 
-          cores = 0
-          experimental-features = nix-command flakes
-          flake-registry = 
-          max-jobs = auto
-          require-sigs = true
-          sandbox = true
-          sandbox-fallback = false
-          substituters = https://cache.nixos.org/
-          system-features = nixos-test benchmark big-parallel kvm
-          trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
-          trusted-substituters = 
-          trusted-users = root
-          use-xdg-base-directories = true
-          warn-dirty = false
-          ssl-cert-file = /etc/ssl/certs/ca-bundle.crt
-        '';
-        destination = "/nix/nix.conf";
-      };
+    # create a PATH from nix packages
+    makePATH = packages: final.lib.concatStringsSep ":" (map (x: "${x}/bin") packages);
+    busyboxPATH = extra: "export PATH=\"${final.makePATH (extra ++ [ final.pkgs.busybox ])}\"";
 
-      # nix daemon script
-      nixDaemon = pkgs.writeScript "nix-daemon" ''
-        #!${sh}
+    # load kernel modules using modprobe
+    # should use wrapped modprobe from PATH
+    loadModules = modules: final.lib.concatStringsSep "\n" (map (x: "modprobe \"${x}\"") modules);
 
-        ${busyboxPATH [ nixPackage ]}
+    # sh for most scripts
+    sh = final.lib.getExe' final.pkgs.busybox "sh";
 
-        # load nix database
-        # disk image creates /nix/.registration
-        if [ -f /nix/.registration ]; then
-            nix-store --load-db < /nix/.registration && rm /nix/.registration
-        fi
+    # kernel modules that we need
+    # adding things here will add it to respective makeModulesClosure
+    # and also import them using loadModules
+    modules = {
+      initrd = [
+        "ahci"
+        "sd_mod"
+        "ext4"
+        "vfat"
+        "nls_cp437"
+        "nls_iso8859-1"
+      ];
+      init = [
 
-        # system generations
-        if ! [ -f /nix/var/nix/profiles/foobar ]; then
-            mkdir -p /nix/var/nix/profiles/foobar
-        fi
-        nix-env --profile /nix/var/nix/profiles/foobar/system --set "$(readlink /run/current-system)"
+        # required for /etc
+        "erofs"
+        "overlay"
 
-        # start the nix daemon
-        exec unshare -m sh -c '
-            mount -o remount,rw,bind,nosuid,nodev /nix/store
-            exec nix-daemon
-        '
-      '';
+        # required for networking
+        "virtio"
+        "virtio_net"
+        "virtio_pci"
+        "af_packet"
 
-      # networking script
-      networking = pkgs.writeScript "networking" ''
-        #!${sh}
+        # graphics
+        "virtio_gpu"
 
-        ${busyboxPATH [ ]}
+      ];
+    };
 
-        ip link set eth0 up
-        udhcpc -i eth0
-      '';
+    # commands to run in initrd
+    initrdCommands = ''
+      printf '\033[0m\033[39;49m\033[H\033[2J'
+      printf '\033[2J\033[H\033[0m\033[1;32m--initrd--\033[0m\n'
 
-      # /etc/hostname hostname
-      # this is loaded using hostname
-      etcHostname = pkgs.writeTextFile {
-        name = "etc-hostname";
-        text = ''
-          foobar
-        '';
-        destination = "/hostname";
-      };
+      echo initrd: creating basic filesystems
+      mkdir -p /proc /sys /dev
+      mount -t proc proc /proc
+      mount -t sysfs sysfs /sys
+      mount -t devtmpfs devtmpfs /dev
 
-      # nsswitch config
-      etcNsswitchConf = pkgs.writeTextFile {
-        name = "etc-nsswitch-conf";
-        text = ''
-          passwd:    files
-          group:     files
-          shadow:    files
+      echo initrd: load kernel modules
+      ${final.loadModules final.modules.initrd}
 
-          hosts:     files dns
-          networks:  files
+      echo initrd: finding real root
+      find_label() {
+          label="$1"
 
-          ethers:    files
-          services:  files
-          protocols: files
-          rpc:       files
+          for dev in /dev/*; do
+              blkid "$dev" 2>/dev/null | grep -q "LABEL=\"$label\"" && {
+                  echo "$dev"
+                  return
+              }
+          done
+      }
+      boot=$(find_label FOOBAR-ESP)
+      root=$(find_label FOOBAR-ROOT)
 
-          subuid:    files
-          subgid:    files
-        '';
-        destination = "/nsswitch.conf";
-      };
+      echo initrd: mounting real root
 
-      # os-release!
-      etcOsRelease = pkgs.writeTextFile {
-        name = "etc-os-release";
-        text = ''
-          ID=foobar
-          NAME=foobar
-          PRETTY_NAME=foobar
-          VENDOR_NAME=foobar
-        '';
-        destination = "/os-release";
-      };
+      # tmpfs rootfs
+      mkdir -p /root
+      mount -t tmpfs tmpfs /root
 
-      # this is loaded when a user logs in
-      # PATH can be set to just /run/current-system/sw/bin
-      etcProfile = pkgs.writeTextFile {
-        name = "etc-profile";
-        text = ''
-          export PATH=/run/current-system/sw/bin
+      # persistent disk
+      mkdir -p /root/persist
+      mount -t ext4 "$root" /root/persist
 
-          if [ "$USER" = "root" ]; then
-              PROMPT_COLOR="1;31m"
-              PROMPT_SYMBOL="#"
+      # boot
+      mkdir -p /root/boot
+      mount -t vfat "$boot" /root/boot
+
+      # nix store
+      mkdir -p /root/nix
+      mount -o bind /root/persist/nix /root/nix
+      mount -o bind /root/nix/store /root/nix/store
+      mount -o remount,ro,bind,nosuid,nodev /root/nix/store
+
+      # home
+      mkdir -p /root/persist/home
+      mkdir -p /root/home
+      mount -o bind,nosuid,nodev /root/persist/home /root/home
+
+      # var
+      mkdir -p /root/persist/var
+      mkdir -p /root/var
+      mount -o bind,nosuid,nodev /root/persist/var /root/var
+
+      echo initrd: switching to real root
+      exec switch_root /root "$BOOTED_CLOSURE/init"
+    '';
+
+    # commands to run as PID 1 (init)
+    initScript = final.pkgs.writeScript "init" ''
+      #!${final.sh}
+
+      ${final.busyboxPATH [ ]}
+
+      printf '\033[0m\033[1;32m--init--\033[0m\n'
+
+      if [ -z "$BOOTED_CLOSURE" ]; then
+          echo init: initrd did not provide BOOTED_CLOSURE >&2
+          exit 1
+      fi
+
+      if ! [ -d "$BOOTED_CLOSURE" ]; then
+          echo init: unable to find BOOTED_CLOSURE "$BOOTED_CLOSURE" >&2
+          exit 1
+      fi
+
+      echo init: starting activation
+
+      env -i closure="$BOOTED_CLOSURE" "$BOOTED_CLOSURE/activate"
+      ln -sfn "$BOOTED_CLOSURE" /run/booted-system
+      unset BOOTED_CLOSURE
+
+      ${builtins.concatStringsSep "\n" (
+        map (x: ''
+          echo init: starting ${x.name}
+          mkdir -p /var/services/${x.name}
+          env -i ${x.exec} >/var/services/${x.name}/stdout 2>/var/services/${x.name}/stderr &
+        '') final.services
+      )}
+
+      exec ${final.stub}
+    '';
+
+    services = [
+      {
+        name = "networking";
+        exec = final.networking;
+      }
+      {
+        name = "nix-daemon";
+        exec = final.nixDaemon;
+      }
+      {
+        name = "getty";
+        exec = final.getty;
+      }
+    ];
+
+    # system generation activation
+    # this should be possible to re-run during runtime
+    # handles
+    # 1. creating basic filesystems (idempotent)
+    # 2. link system closure (atomic, idempotent)
+    # 3. mounting erofs /etc (atomic, idempotent) while keeping runtime state
+    # 4. creating passwd/group/shadow (idempotent)
+    # 5. setting up hostname (idempotent)
+    activate = final.pkgs.writeScript "activate" ''
+      #!${final.sh}
+
+      ${final.busyboxPATH [
+        final.pkgs.util-linux # busybox mount/umount doesn't have --beneath/--recursive
+        final.wrappers.modprobe # wrapped modprobe to look for modules in the right place
+      ]}
+
+      umask 0022
+
+      if [ "$(id -u)" -ne 0 ]; then
+          echo "activate: must be run as root" >&2
+          exit 1
+      fi
+
+      # create and mount filesystems
+      # if not already mounted
+      mount_if_not_mounted() {
+          src="$1"
+          dst="$2"
+          shift 2
+
+          if ! grep -qs " $dst " /proc/self/mountinfo; then
+              mkdir -p "$dst"
+              mount "$@" "$src" "$dst"
+          fi
+      }
+
+      # create and move mounts
+      move_mount() {
+          src="$1"
+          dst="$2"
+
+          if ! grep -qs " $dst " /proc/self/mountinfo; then
+              mkdir -p "$dst"
+              mount --move "$src" "$dst"
           else
-              PROMPT_COLOR="1;32m"
-              PROMPT_SYMBOL='%'
+              mount --move --beneath "$src" "$dst"
+              umount --lazy --recursive "$dst"
+          fi
+      }
+
+      echo activate: creating basic filesystems
+
+      # mount basic filesystems
+      mount_if_not_mounted devtmpfs /dev -o 'nosuid,strictatime,mode=755,size=5%' -t devtmpfs
+      mount_if_not_mounted devpts /dev/pts -o 'nosuid,noexec,mode=620,ptmxmode=0666,gid=3' -t devpts
+      mount_if_not_mounted tmpfs /dev/shm -o 'nosuid,nodev,strictatime,mode=1777,size=50%' -t tmpfs
+      mount_if_not_mounted proc /proc -o 'nosuid,noexec,nodev' -t proc
+      mount_if_not_mounted tmpfs /run -o 'nosuid,nodev,strictatime,mode=755,size=25%' -t tmpfs
+      mount_if_not_mounted sysfs /sys -o 'nosuid,noexec,nodev' -t sysfs
+      mount_if_not_mounted tmpfs /tmp -o 'nosuid,noexec,nodev' -t tmpfs
+
+      # create basic filesystems
+      mkdir -p /var/tmp /var/empty /var/services
+      chmod 1777 /var/tmp
+      chmod 755 /var/empty
+      chmod 750 /var/services
+
+      echo activate: linking system closure
+
+      ln -sfn "$closure" /run/current-system
+
+      echo activate: loading kernel modules
+
+      ${final.loadModules final.modules.init}
+      cat "${final.lib.getExe final.wrappers.modprobe}" > /proc/sys/kernel/modprobe
+
+      echo activate: setting up etc
+
+      # etc lowerdir
+      # /run/etc.next/.lower should be free after the mount --move from last time
+      mount_if_not_mounted /run/current-system/etc /run/etc.next/.lower -t erofs
+
+      # move lowerdir
+      move_mount /run/etc.next/.lower /run/etc/.lower
+
+      # we dont want to replace current upper changes
+      mount_if_not_mounted tmpfs /run/etc/.rw -t tmpfs
+      mkdir -p /run/etc/.rw/upper
+      mkdir -p /run/etc/.rw/work
+
+      # final overlay
+      # /run/etc.next/.overlay should be free after the mount --move from last time
+      #
+      # overlayfs will warn about using upperdir,workdir on two mounts
+      # this is fine because previous overlay is unmounted shortly afterwards
+      mount_if_not_mounted overlay /run/etc.next/.overlay -o lowerdir=/run/etc/.lower,upperdir=/run/etc/.rw/upper,workdir=/run/etc/.rw/work -t overlay
+
+      # move overlay
+      move_mount /run/etc.next/.overlay /etc
+
+      echo activate: setting up users
+
+      # shadow 
+      if [ -f /persist/secrets/shadow ]; then 
+          cat /persist/secrets/shadow > /etc/shadow
+      else
+          # use default shadow file if secret is not found
+          cat ${final.shadow} > /etc/shadow 
+      fi
+
+      # users and groups
+      cat ${final.passwd} > /etc/passwd
+      cat ${final.group} > /etc/group
+
+      # permissions and ownership
+      chmod 644 /etc/passwd
+      chmod 644 /etc/group
+      chmod 640 /etc/shadow
+      chown root:root /etc/passwd
+      chown root:root /etc/group
+      chown root:shadow /etc/shadow
+
+      # create user homes
+      mkdir -p /root
+      chown root:root /root
+      chmod 700 /root
+      mkdir -p /home/foo
+      chown foo:foo /home/foo
+      chmod 700 /home/foo
+
+      echo activate: setting up hostname
+
+      # set system hostname
+      hostname $(cat /etc/hostname)
+    '';
+
+    foobarRebuild = final.pkgs.writeScriptBin "foobar-rebuild" ''
+          #!${final.sh}
+
+          ${final.busyboxPATH [ final.nixPackage ]}
+
+          set -e
+
+          if [ "$(id -u)" -ne 0 ]; then
+              echo rebuild: must be run as root >&2
+              exit 1
           fi
 
-          PS1="\n\[\033[$PROMPT_COLOR\]\w $PROMPT_SYMBOL\[\033[0m\] "
+          if [ "$1" != "test"  ] && [ "$1" != "boot" ] && [ "$1" != "switch" ]; then
+              echo "rebuild: expected verb: test, boot or switch"
+              exit 1
+          fi
 
-          export SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt
+          if [ -z "$FOOBAR_CONFIG" ]; then
+              echo rebuild: environment variable FOOBAR_CONFIG unset >&2
+              exit 1
+          fi
 
-          export TERM=linux
+          if ! [ -f "$FOOBAR_CONFIG" ]; then
+              echo rebuild: unable to find FOOBAR_CONFIG "$FOOBAR_CONFIG" >&2
+              exit 1
+          fi
 
-          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          current=$(readlink /nix/var/nix/profiles/foobar/system | awk -F- '{ print $2 }')
+          echo rebuild: current generation "$current" is at "$(realpath /nix/var/nix/profiles/foobar/system)"
 
-          umask 0077
-        '';
-        destination = "/profile";
-      };
+          echo rebuild: building system closure
+          closure=$(nix build -f "$FOOBAR_CONFIG" build.toplevel --no-link --print-out-paths)
 
-      # ssl certs
-      etcSsl = pkgs.runCommand "etc-ssl" { } ''
-        ln -sfn "${pkgs.cacert}/etc" $out
+          if [ "$1" = "boot" ] || [ "$1" = "switch" ]; then
+
+              echo rebuild: building uki
+              uki=$(nix build -f "$FOOBAR_CONFIG" build.uki --no-link --print-out-paths)
+
+              echo rebuild: installing system closure to profile
+              nix-env --profile /nix/var/nix/profiles/foobar/system --set "$closure"
+              number=$(readlink /nix/var/nix/profiles/foobar/system | awk -F- '{ print $2 }')
+
+              echo rebuild: installing uki to bootloader
+              base=$(mktemp -d)
+              cp "$uki" "$base/uki"
+              mv "$base/uki" "/boot/EFI/Linux/foobar-generation-$number.efi"
+              cat > "/boot/loader/entries/foobar-generation-$number.conf" <<EOF
+      title   foobar generation $number
+      efi     /EFI/Linux/foobar-generation-$number.efi
+      EOF
+              rm -rf "$base"
+
+          elif [ "$1" = "test" ]; then
+
+              number='<test>'
+
+          fi
+
+          if [ "$1" = "test" ] || [ "$1" = "switch" ]; then
+
+              echo rebuild: starting activation
+              env -i closure="$closure" "$closure/activate"
+
+          fi
+
+          echo rebuild: new generation "$number" is at "$closure"
+    '';
+
+    # software to include in system closure
+    # basically the same as nixos /run/current-system/sw
+    software = final.pkgs.buildEnv {
+      name = "software";
+      paths = [
+
+        final.nixPackage
+        final.foobarRebuild
+
+        final.pkgs.git
+
+        final.pkgs.fastfetch
+        final.pkgs.tmux
+
+        (final.lib.hiPrio final.wrappers.modprobe) # busybox provides modprobe
+        final.wrappers.poweroff
+
+        final.pkgs.busybox
+
+      ];
+    };
+
+    # wrapped packages
+    wrappers = {
+      modprobe = final.pkgs.writeScriptBin "modprobe" ''
+        #!${final.sh}
+
+        export PATH="${final.makePATH [ final.pkgs.kmod ]}"
+
+        export MODPROBE_OPTIONS='-d /run/current-system/kernel-modules'
+        modprobe "$@"
       '';
+      poweroff = final.pkgs.writeScriptBin "poweroff" ''
+        #!${final.sh}
 
-      # final etc tree
-      etc = pkgs.symlinkJoin {
-        name = "etc";
-        paths = [
-          nixConf
-          etcHostname
-          etcNsswitchConf
-          etcOsRelease
-          etcProfile
-          etcSsl
-        ];
-      };
+        ${final.busyboxPATH [ ]}
 
-      # erofs etc image
-      etcErofs = pkgs.runCommand "etc-erofs" { nativeBuildInputs = [ pkgs.erofs-utils ]; } ''
-        mkdir -p etc
-
-        cp -r ${etc}/* etc/
-
-        mkfs.erofs \
-          -zlz4hc \
-          $out \
-          etc
+        kill -TERM 1
       '';
+    };
 
-      # /etc/passwd
-      # this is loaded separately
-      passwd = pkgs.writeText "etc-passwd" ''
-        root:x:0:0:System administrator:/root:/run/current-system/sw/bin/ash
-        foo:x:1000:1000:Standard user:/home/foo:/run/current-system/sw/bin/ash
-        nobody:x:65534:65534:Unprivileged account (don't use!):/var/empty:/run/current-system/sw/bin/nologin
-        nixbld1:x:30001:30000:Nix build user 1:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld2:x:30002:30000:Nix build user 2:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld3:x:30003:30000:Nix build user 3:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld4:x:30004:30000:Nix build user 4:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld5:x:30005:30000:Nix build user 5:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld6:x:30006:30000:Nix build user 6:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld7:x:30007:30000:Nix build user 7:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld8:x:30008:30000:Nix build user 8:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld9:x:30009:30000:Nix build user 9:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld10:x:30010:30000:Nix build user 10:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld11:x:30011:30000:Nix build user 11:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld12:x:30012:30000:Nix build user 12:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld13:x:30013:30000:Nix build user 13:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld14:x:30014:30000:Nix build user 14:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld15:x:30015:30000:Nix build user 15:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld16:x:30016:30000:Nix build user 16:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld17:x:30017:30000:Nix build user 17:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld18:x:30018:30000:Nix build user 18:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld19:x:30019:30000:Nix build user 19:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld20:x:30020:30000:Nix build user 20:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld21:x:30021:30000:Nix build user 21:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld22:x:30022:30000:Nix build user 22:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld23:x:30023:30000:Nix build user 23:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld24:x:30024:30000:Nix build user 24:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld25:x:30025:30000:Nix build user 25:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld26:x:30026:30000:Nix build user 26:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld27:x:30027:30000:Nix build user 27:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld28:x:30028:30000:Nix build user 28:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld29:x:30029:30000:Nix build user 29:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld30:x:30030:30000:Nix build user 30:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld31:x:30031:30000:Nix build user 31:/var/empty:/run/current-system/sw/bin/nologin
-        nixbld32:x:30032:30000:Nix build user 32:/var/empty:/run/current-system/sw/bin/nologin
+    # nix package manager implementation
+    nixPackage = final.pkgs.lix;
+
+    # nix package manager configuration
+    nixConf = final.pkgs.writeTextFile {
+      name = "etc-nix-conf";
+      text = ''
+        accept-flake-config = false
+        allow-import-from-derivation = false
+        allowed-users = @wheel
+        auto-optimise-store = true
+        builders = 
+        cores = 0
+        experimental-features = nix-command flakes
+        flake-registry = 
+        max-jobs = auto
+        require-sigs = true
+        sandbox = true
+        sandbox-fallback = false
+        substituters = https://cache.nixos.org/
+        system-features = nixos-test benchmark big-parallel kvm
+        trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+        trusted-substituters = 
+        trusted-users = root
+        use-xdg-base-directories = true
+        warn-dirty = false
+        ssl-cert-file = /etc/ssl/certs/ca-bundle.crt
       '';
+      destination = "/nix/nix.conf";
+    };
 
-      # /etc/group
-      # this is loaded separately
-      group = pkgs.writeText "etc-group" ''
-        root:x:0:
-        wheel:x:1:foo
-        tty:x:3:
-        shadow:x:318:
-        foo:x:1000:
-        nogroup:x:65534:
-        nixbld:x:30000:nixbld1,nixbld10,nixbld11,nixbld12,nixbld13,nixbld14,nixbld15,nixbld16,nixbld17,nixbld18,nixbld19,nixbld2,nixbld20,nixbld21,nixbld22,nixbld23,nixbld24,nixbld25,nixbld26,nixbld27,nixbld28,nixbld29,nixbld3,nixbld30,nixbld31,nixbld32,nixbld4,nixbld5,nixbld6,nixbld7,nixbld8,nixbld9
+    # nix daemon script
+    nixDaemon = final.pkgs.writeScript "nix-daemon" ''
+      #!${final.sh}
+
+      ${final.busyboxPATH [ final.nixPackage ]}
+
+      # load nix database
+      # disk image creates /nix/.registration
+      if [ -f /nix/.registration ]; then
+          nix-store --load-db < /nix/.registration && rm /nix/.registration
+      fi
+
+      # system generations
+      if ! [ -f /nix/var/nix/profiles/foobar ]; then
+          mkdir -p /nix/var/nix/profiles/foobar
+      fi
+      nix-env --profile /nix/var/nix/profiles/foobar/system --set "$(readlink /run/current-system)"
+
+      # start the nix daemon
+      exec unshare -m sh -c '
+          mount -o remount,rw,bind,nosuid,nodev /nix/store
+          exec nix-daemon
+      '
+    '';
+
+    # networking script
+    networking = final.pkgs.writeScript "networking" ''
+      #!${final.sh}
+
+      ${final.busyboxPATH [ ]}
+
+      ip link set eth0 up
+      udhcpc -i eth0
+    '';
+
+    # /etc/hostname hostname
+    # this is loaded using hostname
+    etcHostname = final.pkgs.writeTextFile {
+      name = "etc-hostname";
+      text = ''
+        foobar
       '';
+      destination = "/hostname";
+    };
 
-      # default /etc/shadow
-      # this is loaded separately
-      # this is used ONLY If /persist/secrets/shadow doesn't exist
-      # user: foo  ; password: foo
-      # user: root ; password: root
-      shadow = pkgs.writeText "etc-shadow-default" ''
-        root:$6$miCeoFcigmVhZ0HR$5fM9is80q/wYAMs0TWrw6tmM3FoIIeL0eprPSL2wRd/apIEWd0K1jxCspRQVwbxOKC/ykHBDdWs0cSvwfwbgK1:1::::::
-        foo:$6$G7hka6E6pPmHnhQH$QgY/sSCFzEnW17vmdG0kkJb4Eve/sh6lQg/K8OcsKFfWVaTWwdFjBExwFvhhfvvki1ZYUHJo7v.IFOFFNBHgJ.:1::::::
-        nobody:!:1::::::
+    # nsswitch config
+    etcNsswitchConf = final.pkgs.writeTextFile {
+      name = "etc-nsswitch-conf";
+      text = ''
+        passwd:    files
+        group:     files
+        shadow:    files
+
+        hosts:     files dns
+        networks:  files
+
+        ethers:    files
+        services:  files
+        protocols: files
+        rpc:       files
+
+        subuid:    files
+        subgid:    files
       '';
+      destination = "/nsswitch.conf";
+    };
 
-      # 1. reap zombies
-      # 2. handle poweroff
-      stub = pkgs.stdenv.mkDerivation {
-        pname = "stub";
-        version = "0";
+    # os-release!
+    etcOsRelease = final.pkgs.writeTextFile {
+      name = "etc-os-release";
+      text = ''
+        ID=foobar
+        NAME=foobar
+        PRETTY_NAME=foobar
+        VENDOR_NAME=foobar
+      '';
+      destination = "/os-release";
+    };
 
-        dontUnpack = true;
+    # this is loaded when a user logs in
+    # PATH can be set to just /run/current-system/sw/bin
+    etcProfile = final.pkgs.writeTextFile {
+      name = "etc-profile";
+      text = ''
+        export PATH=/run/current-system/sw/bin
 
-        src = pkgs.writeText "stub.c" ''
-          #include <signal.h>
-          #include <sys/reboot.h>
-          #include <unistd.h>
+        if [ "$USER" = "root" ]; then
+            PROMPT_COLOR="1;31m"
+            PROMPT_SYMBOL="#"
+        else
+            PROMPT_COLOR="1;32m"
+            PROMPT_SYMBOL='%'
+        fi
 
-          void term(int sig)
-          {
-              reboot(RB_POWER_OFF);
-          }
+        PS1="\n\[\033[$PROMPT_COLOR\]\w $PROMPT_SYMBOL\[\033[0m\] "
 
-          int main()
-          {
-              signal(SIGCHLD, SIG_IGN);
-              signal(SIGTERM, term);
+        export SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt
 
-              for (;;)
-                  pause();
-          }
-        '';
+        export TERM=linux
 
-        buildPhase = ''
-          $CC $src -O2 -o stub
-        '';
+        export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 
-        installPhase = ''
-          cp stub $out
-        '';
-      };
+        umask 0077
+      '';
+      destination = "/profile";
+    };
 
-      # getty for logins
-      # using busybox getty and login because
-      # the ones from util-linux and shadow use PAM
-      # we dont use PAM
-      getty = pkgs.writeScript "getty" ''
-        #!${sh}
+    # ssl certs
+    etcSsl = final.pkgs.runCommand "etc-ssl" { } ''
+      ln -sfn "${final.pkgs.cacert}/etc" $out
+    '';
 
-        ${busyboxPATH [ ]}
+    # final etc tree
+    etc = final.pkgs.symlinkJoin {
+      name = "etc";
+      paths = [
+        final.nixConf
+        final.etcHostname
+        final.etcNsswitchConf
+        final.etcOsRelease
+        final.etcProfile
+        final.etcSsl
+      ];
+    };
 
-        getty_loop() {
-            tty="$1"
-            baud="$2"
+    # erofs etc image
+    etcErofs = final.pkgs.runCommand "etc-erofs" { nativeBuildInputs = [ final.pkgs.erofs-utils ]; } ''
+      mkdir -p etc
 
-            while true; do
-                setsid -c getty -l login "$baud" "$tty"
-            done
+      cp -r ${final.etc}/* etc/
+
+      mkfs.erofs \
+        -zlz4hc \
+        $out \
+        etc
+    '';
+
+    # /etc/passwd
+    # this is loaded separately
+    passwd = final.pkgs.writeText "etc-passwd" ''
+      root:x:0:0:System administrator:/root:/run/current-system/sw/bin/ash
+      foo:x:1000:1000:Standard user:/home/foo:/run/current-system/sw/bin/ash
+      nobody:x:65534:65534:Unprivileged account (don't use!):/var/empty:/run/current-system/sw/bin/nologin
+      nixbld1:x:30001:30000:Nix build user 1:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld2:x:30002:30000:Nix build user 2:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld3:x:30003:30000:Nix build user 3:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld4:x:30004:30000:Nix build user 4:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld5:x:30005:30000:Nix build user 5:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld6:x:30006:30000:Nix build user 6:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld7:x:30007:30000:Nix build user 7:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld8:x:30008:30000:Nix build user 8:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld9:x:30009:30000:Nix build user 9:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld10:x:30010:30000:Nix build user 10:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld11:x:30011:30000:Nix build user 11:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld12:x:30012:30000:Nix build user 12:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld13:x:30013:30000:Nix build user 13:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld14:x:30014:30000:Nix build user 14:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld15:x:30015:30000:Nix build user 15:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld16:x:30016:30000:Nix build user 16:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld17:x:30017:30000:Nix build user 17:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld18:x:30018:30000:Nix build user 18:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld19:x:30019:30000:Nix build user 19:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld20:x:30020:30000:Nix build user 20:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld21:x:30021:30000:Nix build user 21:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld22:x:30022:30000:Nix build user 22:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld23:x:30023:30000:Nix build user 23:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld24:x:30024:30000:Nix build user 24:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld25:x:30025:30000:Nix build user 25:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld26:x:30026:30000:Nix build user 26:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld27:x:30027:30000:Nix build user 27:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld28:x:30028:30000:Nix build user 28:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld29:x:30029:30000:Nix build user 29:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld30:x:30030:30000:Nix build user 30:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld31:x:30031:30000:Nix build user 31:/var/empty:/run/current-system/sw/bin/nologin
+      nixbld32:x:30032:30000:Nix build user 32:/var/empty:/run/current-system/sw/bin/nologin
+    '';
+
+    # /etc/group
+    # this is loaded separately
+    group = final.pkgs.writeText "etc-group" ''
+      root:x:0:
+      wheel:x:1:foo
+      tty:x:3:
+      shadow:x:318:
+      foo:x:1000:
+      nogroup:x:65534:
+      nixbld:x:30000:nixbld1,nixbld10,nixbld11,nixbld12,nixbld13,nixbld14,nixbld15,nixbld16,nixbld17,nixbld18,nixbld19,nixbld2,nixbld20,nixbld21,nixbld22,nixbld23,nixbld24,nixbld25,nixbld26,nixbld27,nixbld28,nixbld29,nixbld3,nixbld30,nixbld31,nixbld32,nixbld4,nixbld5,nixbld6,nixbld7,nixbld8,nixbld9
+    '';
+
+    # default /etc/shadow
+    # this is loaded separately
+    # this is used ONLY If /persist/secrets/shadow doesn't exist
+    # user: foo  ; password: foo
+    # user: root ; password: root
+    shadow = final.pkgs.writeText "etc-shadow-default" ''
+      root:$6$miCeoFcigmVhZ0HR$5fM9is80q/wYAMs0TWrw6tmM3FoIIeL0eprPSL2wRd/apIEWd0K1jxCspRQVwbxOKC/ykHBDdWs0cSvwfwbgK1:1::::::
+      foo:$6$G7hka6E6pPmHnhQH$QgY/sSCFzEnW17vmdG0kkJb4Eve/sh6lQg/K8OcsKFfWVaTWwdFjBExwFvhhfvvki1ZYUHJo7v.IFOFFNBHgJ.:1::::::
+      nobody:!:1::::::
+    '';
+
+    # 1. reap zombies
+    # 2. handle poweroff
+    stub = final.pkgs.stdenv.mkDerivation {
+      pname = "stub";
+      version = "0";
+
+      dontUnpack = true;
+
+      src = final.pkgs.writeText "stub.c" ''
+        #include <signal.h>
+        #include <sys/reboot.h>
+        #include <unistd.h>
+
+        void term(int sig)
+        {
+            reboot(RB_POWER_OFF);
         }
 
-        getty_loop ttyS0 115200 &
-        getty_loop tty1 38400 &
+        int main()
+        {
+            signal(SIGCHLD, SIG_IGN);
+            signal(SIGTERM, term);
 
-        wait
+            for (;;)
+                pause();
+        }
       '';
 
-      # disk image bootloader configuration
-      loaderConf = pkgs.writeText "loader-conf" ''
-        timeout 5
+      buildPhase = ''
+        $CC $src -O2 -o stub
       '';
 
-      # disk image bootloader entry
-      loaderEntry = pkgs.writeText "foobar-generation-1.conf" ''
-        title   foobar generation 1
-        efi     /EFI/Linux/foobar-generation-1.efi
+      installPhase = ''
+        cp stub $out
       '';
+    };
 
-      closure = pkgs.closureInfo {
-        rootPaths = [ foo.build.toplevel ];
-      };
+    # getty for logins
+    # using busybox getty and login because
+    # the ones from util-linux and shadow use PAM
+    # we dont use PAM
+    getty = final.pkgs.writeScript "getty" ''
+      #!${final.sh}
 
-      diskImage =
-        pkgs.runCommand "foobar.raw"
-          {
-            nativeBuildInputs = [
-              pkgs.systemd
-              pkgs.fakeroot
-              pkgs.dosfstools
-              pkgs.e2fsprogs
-              pkgs.mtools
-            ];
-          }
-          ''
-            mkdir -p repart.d
+      ${final.busyboxPATH [ ]}
 
-            cat > repart.d/00-esp.conf <<EOF
-            [Partition]
-            Type=esp
-            Format=vfat
-            SizeMinBytes=200M
-            SizeMaxBytes=200M
-            Label=FOOBAR-ESP
-            CopyFiles=${foo.build.uki}:/EFI/Linux/foobar-generation-1.efi
-            CopyFiles=${pkgs.systemd}/lib/systemd/boot/efi/systemd-bootx64.efi:/EFI/BOOT/BOOTX64.EFI
-            CopyFiles=${loaderConf}:/loader/loader.conf
-            CopyFiles=${loaderEntry}:/loader/entries/foobar-generation-1.conf
-            EOF
+      getty_loop() {
+          tty="$1"
+          baud="$2"
 
-            cat > repart.d/10-root.conf <<EOF
-            [Partition]
-            Type=root-x86-64
-            Format=ext4
-            Label=FOOBAR-ROOT
-            CopyFiles=${closure}/registration:/nix/.registration
-            EOF
+          while true; do
+              setsid -c getty -l login "$baud" "$tty"
+          done
+      }
 
-            for path in $(cat ${closure}/store-paths); do
-              echo "CopyFiles=$path:/nix/store/''${path#/nix/store/}" >> repart.d/10-root.conf
-            done
+      getty_loop ttyS0 115200 &
+      getty_loop tty1 38400 &
 
-            fakeroot systemd-repart \
-              --empty=create \
-              --size=5G \
-              --definitions=repart.d \
-              $out
-          '';
-    }
-    // extraConfiguration;
+      wait
+    '';
+
+    # disk image bootloader configuration
+    loaderConf = final.pkgs.writeText "loader-conf" ''
+      timeout 5
+    '';
+
+    # disk image bootloader entry
+    loaderEntry = final.pkgs.writeText "foobar-generation-1.conf" ''
+      title   foobar generation 1
+      efi     /EFI/Linux/foobar-generation-1.efi
+    '';
+
+    closure = final.pkgs.closureInfo {
+      rootPaths = [ final.foo.build.toplevel ];
+    };
+
+    diskImage =
+      final.pkgs.runCommand "foobar.raw"
+        {
+          nativeBuildInputs = [
+            final.pkgs.systemd
+            final.pkgs.fakeroot
+            final.pkgs.dosfstools
+            final.pkgs.e2fsprogs
+            final.pkgs.mtools
+          ];
+        }
+        ''
+          mkdir -p repart.d
+
+          cat > repart.d/00-esp.conf <<EOF
+          [Partition]
+          Type=esp
+          Format=vfat
+          SizeMinBytes=200M
+          SizeMaxBytes=200M
+          Label=FOOBAR-ESP
+          CopyFiles=${final.foo.build.uki}:/EFI/Linux/foobar-generation-1.efi
+          CopyFiles=${final.pkgs.systemd}/lib/systemd/boot/efi/systemd-bootx64.efi:/EFI/BOOT/BOOTX64.EFI
+          CopyFiles=${final.loaderConf}:/loader/loader.conf
+          CopyFiles=${final.loaderEntry}:/loader/entries/foobar-generation-1.conf
+          EOF
+
+          cat > repart.d/10-root.conf <<EOF
+          [Partition]
+          Type=root-x86-64
+          Format=ext4
+          Label=FOOBAR-ROOT
+          CopyFiles=${final.closure}/registration:/nix/.registration
+          EOF
+
+          for path in $(cat ${final.closure}/store-paths); do
+            echo "CopyFiles=$path:/nix/store/''${path#/nix/store/}" >> repart.d/10-root.conf
+          done
+
+          fakeroot systemd-repart \
+            --empty=create \
+            --size=5G \
+            --definitions=repart.d \
+            $out
+        '';
+  });
 in
 configuration

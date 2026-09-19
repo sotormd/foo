@@ -1,1 +1,1 @@
-(import ./configuration.nix { }).foo
+(import ./configuration.nix).foo

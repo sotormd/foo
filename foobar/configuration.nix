@@ -591,6 +591,8 @@ let
 
       ip link set eth0 up
       udhcpc -i eth0
+
+      ip link set lo up
     '';
     networking = final.pkgs.writeScript "networking" final.networkingCommands;
 

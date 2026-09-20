@@ -139,7 +139,7 @@ let
       initrd = [
         "ahci"
         "sd_mod"
-        "ext4"
+        "xfs"
         "vfat"
         "nls_cp437"
         "nls_iso8859-1"
@@ -198,7 +198,7 @@ let
 
       # persistent disk
       mkdir -p /root/persist
-      mount -t ext4 "$root" /root/persist
+      mount -t xfs "$root" /root/persist
 
       # boot
       mkdir -p /root/boot
@@ -521,6 +521,7 @@ let
 
         ${final.busyboxPATH [ ]}
 
+        sync
         kill -TERM 1
       '';
     };
@@ -854,7 +855,7 @@ let
             final.pkgs.systemd
             final.pkgs.fakeroot
             final.pkgs.dosfstools
-            final.pkgs.e2fsprogs
+            final.pkgs.xfsprogs
             final.pkgs.mtools
           ];
         }
@@ -877,7 +878,7 @@ let
           cat > repart.d/10-root.conf <<EOF
           [Partition]
           Type=root-x86-64
-          Format=ext4
+          Format=xfs
           Label=FOOBAR-ROOT
           CopyFiles=${final.closure}/registration:/nix/.registration
           EOF

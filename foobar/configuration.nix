@@ -521,7 +521,6 @@ let
 
         ${final.busyboxPATH [ ]}
 
-        sync
         kill -TERM 1
       '';
     };
@@ -779,6 +778,22 @@ let
 
       void term(int sig)
       {
+          // sigterm all processes except self
+          kill(-1, SIGTERM);
+
+          // sync filesystems
+          sync();
+
+          // probably needed idk
+          sleep(1);
+
+          // sigkill remaining processes
+          kill(-1, SIGKILL);
+
+          // sync again :p
+          sync();
+
+          // finally shutdown
           reboot(RB_POWER_OFF);
       }
 

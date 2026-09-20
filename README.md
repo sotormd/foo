@@ -63,6 +63,9 @@ system with:
 6. Basic networking and SSL certificates
 7. Disk image with `systemd-repart` and `systemd-boot` bootloader
 
+foobar's [configuration](./foobar/configuration.nix) can also be extended using
+`.extend` (for eg, to add services).
+
 To build the example:
 
 ```bash
@@ -70,3 +73,5 @@ nix build -f foobar build.diskImage
 ```
 
 This can be booted with QEMU.
+
+![screenshot](./foobar.png)

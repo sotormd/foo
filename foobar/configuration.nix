@@ -436,7 +436,7 @@ let
               exit 1
           fi
 
-          if ! [ -f "$FOOBAR_CONFIG" ]; then
+          if ! [ -e "$FOOBAR_CONFIG" ]; then
               echo rebuild: unable to find FOOBAR_CONFIG "$FOOBAR_CONFIG" >&2
               exit 1
           fi

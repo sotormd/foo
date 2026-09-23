@@ -863,6 +863,8 @@ let
       rootPaths = [ final.foo.build.toplevel ];
     };
 
+    diskImageSize = "5G";
+
     diskImage =
       final.pkgs.runCommand "foobar.raw"
         {
@@ -904,7 +906,7 @@ let
 
           fakeroot systemd-repart \
             --empty=create \
-            --size=5G \
+            --size=${final.diskImageSize} \
             --definitions=repart.d \
             $out
         '';

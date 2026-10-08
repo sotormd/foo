@@ -168,15 +168,31 @@ let
       printf '\033[2J\033[H\033[0m\033[1;32m--initrd--\033[0m\n'
 
       echo initrd: creating basic filesystems
-      mkdir -p /proc /sys /dev
-      mount -t proc proc /proc
-      mount -t sysfs sysfs /sys
-      mount -t devtmpfs devtmpfs /dev
+      ${final.initrdCreateBasicFilesystemsCommands}
 
       echo initrd: load kernel modules
       ${final.loadModules final.modules.initrd}
 
       echo initrd: finding real root
+      ${final.initrdFindRealRootCommands}
+
+      echo initrd: mounting real root
+      ${final.initrdMountRealRootCommands}
+
+      echo initrd: switching to real root
+      exec switch_root /root "$BOOTED_CLOSURE/init"
+    '';
+
+    # create basic filesystems in initrd
+    initrdCreateBasicFilesystemsCommands = ''
+      mkdir -p /proc /sys /dev
+      mount -t proc proc /proc
+      mount -t sysfs sysfs /sys
+      mount -t devtmpfs devtmpfs /dev
+    '';
+
+    # find real root in initrd
+    initrdFindRealRootCommands = ''
       find_label() {
           label="$1"
 
@@ -189,9 +205,10 @@ let
       }
       boot=$(find_label FOOBAR-ESP)
       root=$(find_label FOOBAR-ROOT)
+    '';
 
-      echo initrd: mounting real root
-
+    # mount real root in initrd
+    initrdMountRealRootCommands = ''
       # tmpfs rootfs
       mkdir -p /root
       mount -t tmpfs tmpfs /root
@@ -219,9 +236,6 @@ let
       mkdir -p /root/persist/var
       mkdir -p /root/var
       mount -o bind,nosuid,nodev /root/persist/var /root/var
-
-      echo initrd: switching to real root
-      exec switch_root /root "$BOOTED_CLOSURE/init"
     '';
 
     # commands to run as PID 1 (init)
@@ -415,80 +429,216 @@ let
     # foobar-rebuild
     # rebuild a new system generation
     foobarRebuildCommands = ''
-          #!${final.sh}
+      #!${final.sh}
 
-          ${final.busyboxPATH [ final.nixPackage ]}
+      ${final.busyboxPATH (
+        final.lib.flatten [
+          final.nixPackage
+          (final.lib.optional final.foobarRebuildSecureBootEnabled final.pkgs.sbsigntool)
+        ]
+      )}
 
-          set -e
+      set -e
 
-          if [ "$(id -u)" -ne 0 ]; then
-              echo rebuild: must be run as root >&2
-              exit 1
-          fi
+      if [ "$(id -u)" -ne 0 ]; then
+          echo rebuild: must be run as root >&2
+          exit 1
+      fi
 
-          if [ "$1" != "test"  ] && [ "$1" != "boot" ] && [ "$1" != "switch" ]; then
-              echo "rebuild: expected verb: test, boot or switch"
-              exit 1
-          fi
+      if [ "$1" != "test"  ] && [ "$1" != "boot" ] && [ "$1" != "switch" ]; then
+          echo "rebuild: expected verb: test, boot or switch"
+          exit 1
+      fi
 
-          if [ -z "$FOOBAR_CONFIG" ]; then
-              echo rebuild: environment variable FOOBAR_CONFIG unset >&2
-              exit 1
-          fi
+      if [ -z "$FOOBAR_CONFIG" ]; then
+          echo rebuild: environment variable FOOBAR_CONFIG unset >&2
+          exit 1
+      fi
 
-          if ! [ -e "$FOOBAR_CONFIG" ]; then
-              echo rebuild: unable to find FOOBAR_CONFIG "$FOOBAR_CONFIG" >&2
-              exit 1
-          fi
+      current=$(readlink /nix/var/nix/profiles/foobar/system | awk -F- '{ print $2 }')
+      echo rebuild: current generation "$current" is at "$(realpath /nix/var/nix/profiles/foobar/system)"
 
-          current=$(readlink /nix/var/nix/profiles/foobar/system | awk -F- '{ print $2 }')
-          echo rebuild: current generation "$current" is at "$(realpath /nix/var/nix/profiles/foobar/system)"
+      echo rebuild: building system closure
+      closure=$(nix build -f "$FOOBAR_CONFIG" build.toplevel --no-link --print-out-paths)
 
-          echo rebuild: building system closure
-          closure=$(nix build -f "$FOOBAR_CONFIG" build.toplevel --no-link --print-out-paths)
+      if [ "$1" = "boot" ] || [ "$1" = "switch" ]; then
 
-          if [ "$1" = "boot" ] || [ "$1" = "switch" ]; then
+          echo rebuild: building uki
+          uki=$(nix build -f "$FOOBAR_CONFIG" build.uki --no-link --print-out-paths)
 
-              echo rebuild: building uki
-              uki=$(nix build -f "$FOOBAR_CONFIG" build.uki --no-link --print-out-paths)
+          echo rebuild: installing system closure to profile
+          nix-env --profile /nix/var/nix/profiles/foobar/system --set "$closure"
+          number=$(readlink /nix/var/nix/profiles/foobar/system | awk -F- '{ print $2 }')
 
-              echo rebuild: installing system closure to profile
-              nix-env --profile /nix/var/nix/profiles/foobar/system --set "$closure"
-              number=$(readlink /nix/var/nix/profiles/foobar/system | awk -F- '{ print $2 }')
+          echo rebuild: installing uki
+          (
+            ${final.foobarRebuildInstallUkiCommands}
+          )
 
-              echo rebuild: installing uki to bootloader
+          echo rebuild: installing bootloader
+          (
+            ${final.foobarRebuildInstallBootloaderCommands}
+          )
+
+      elif [ "$1" = "test" ]; then
+
+          number='<test>'
+
+      fi
+
+      if [ "$1" = "test" ] || [ "$1" = "switch" ]; then
+
+          echo rebuild: starting activation
+          env -i closure="$closure" "$closure/activate"
+
+      fi
+
+      echo rebuild: new generation "$number" is at "$closure"
+    '';
+    foobarRebuild = final.pkgs.writeScriptBin "foobar-rebuild" final.foobarRebuildCommands;
+
+    # install uki during foobar-rebuild
+    foobarRebuildInstallUkiCommands = ''
               base=$(mktemp -d)
               cp "$uki" "$base/uki"
-              mv "$base/uki" "/boot/EFI/Linux/foobar-generation-$number.efi"
+              ${final.foobarRebuildInstallUkiSecureBootCommands}
+              mv "$base/final.efi" "/boot/EFI/Linux/foobar-generation-$number.efi"
               cat > "/boot/loader/entries/foobar-generation-$number.conf" <<EOF
       title   foobar generation $number
       efi     /EFI/Linux/foobar-generation-$number.efi
       EOF
               rm -rf "$base"
-
-          elif [ "$1" = "test" ]; then
-
-              number='<test>'
-
-          fi
-
-          if [ "$1" = "test" ] || [ "$1" = "switch" ]; then
-
-              echo rebuild: starting activation
-              env -i closure="$closure" "$closure/activate"
-
-          fi
-
-          echo rebuild: new generation "$number" is at "$closure"
     '';
-    foobarRebuild = final.pkgs.writeScriptBin "foobar-rebuild" final.foobarRebuildCommands;
+
+    # install bootloader during foobar-rebuild
+    foobarRebuildInstallBootloaderCommands = ''
+      src="${final.pkgs.systemd}/lib/systemd/boot/efi/systemd-bootx64.efi"
+      dst="/boot/EFI/BOOT/BOOTX64.EFI"
+
+      base=$(mktemp -d)
+      cp "$src" "$base/loader"
+      ${final.foobarRebuildInstallBootloaderSecureBootCommands}
+      mv "$base/final.efi" "$dst"
+      rm -rf "$base"
+    '';
+
+    # secure boot key and certificate
+    secureBootDir = "/var/secureboot";
+    secureBootKey = "db.key";
+    secureBootCert = "db.crt";
+    foobarRebuildSecureBootEnabled = false;
+
+    # for signed uki during foobar-rebuild
+    foobarRebuildInstallUkiSecureBootCommands =
+      if final.foobarRebuildSecureBootEnabled then
+        ''
+          key="${final.secureBootDir}/${final.secureBootKey}"
+          crt="${final.secureBootDir}/${final.secureBootCert}"
+
+          if ! [ -f "$key" ]; then
+             echo rebuild: secure boot key not found >&2
+             exit 1
+          fi
+
+          if ! [ -f "$crt" ]; then
+             echo rebuild: secure boot cert not found >%2
+             exit 1
+          fi
+
+          sbsign \
+            --key ${final.secureBootDir}/${final.secureBootKey} \
+            --cert ${final.secureBootDir}/${final.secureBootCert} \
+            --output "$base/final.efi" \
+            "$base/uki"
+        ''
+      else
+        ''
+          mv "$base/uki" "$base/final.efi"
+        '';
+
+    # for signed bootloader during foobar-rebuild
+    foobarRebuildInstallBootloaderSecureBootCommands =
+      if final.foobarRebuildSecureBootEnabled then
+        ''
+          key="${final.secureBootDir}/${final.secureBootKey}"
+          crt="${final.secureBootDir}/${final.secureBootCert}"
+
+          if ! [ -f "$key" ]; then
+             echo rebuild: secure boot key not found >&2
+             exit 1
+          fi
+
+          if ! [ -f "$crt" ]; then
+             echo rebuild: secure boot cert not found >%2
+             exit 1
+          fi
+
+          sbsign \
+            --key ${final.secureBootDir}/${final.secureBootKey} \
+            --cert ${final.secureBootDir}/${final.secureBootCert} \
+            --output "$base/final.efi" \
+            "$base/loader"          
+        ''
+      else
+        ''
+          mv "$base/loader" "$base/final.efi"
+        '';
+
+    # for setting up secure boot
+    foobarGenerateSecureBootKeys = final.pkgs.writeScriptBin "foobar-generate-secureboot-keys" ''
+      #!${final.sh}
+
+      set -e
+
+      ${final.busyboxPATH [ final.pkgs.openssl ]}
+
+      key="${final.secureBootDir}/${final.secureBootKey}"
+      crt="${final.secureBootDir}/${final.secureBootCert}"
+
+      if [ -f "$key" ]; then
+         echo secureboot: secure boot key already exists >&2
+         exit 1
+      fi
+
+      if [ -f "$crt" ]; then
+         echo secureboot: secure boot cert already exists >%2
+         exit 1
+      fi
+
+      echo secureboot: creating ${final.secureBootDir}
+
+      install -d -m 0700 ${final.secureBootDir}
+
+      echo secureboot: generating keys
+
+      openssl req \
+        -new \
+        -x509 \
+        -newkey rsa:2048 \
+        -sha256 \
+        -nodes \
+        -days 3650 \
+        -subj "/CN=foobar Secure Boot/" \
+        -keyout "$key" \
+        -out "$crt"
+
+      chmod 600 "$key"
+      chmod 644 "$crt"
+
+      echo secureboot: generated :-
+      echo "secureboot:     private key $key"
+      echo "secureboot:     certificate $crt"
+      echo secureboot: to install signed uki and bootloader :-
+      echo "secureboot:     rebuild foobar with foobarRebuildSecureBootEnabled set to true"
+    '';
 
     # software to include in system closure
     # basically the same as nixos /run/current-system/sw
-    softwarePaths = [
+    softwarePaths = final.lib.flatten [
 
       final.nixPackage
       final.foobarRebuild
+      final.foobarGenerateSecureBootKeys
 
       final.pkgs.git
 
@@ -499,6 +649,11 @@ let
       final.wrappers.poweroff
 
       final.pkgs.busybox
+
+      (final.lib.optional final.foobarRebuildSecureBootEnabled [
+        final.pkgs.sbctl
+        final.pkgs.sbsigntool
+      ])
 
     ];
     software = final.pkgs.buildEnv {

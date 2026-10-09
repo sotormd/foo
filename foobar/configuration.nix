@@ -549,7 +549,7 @@ let
     # does not use a bootloader from the new generation
     foobarRebuildInstallBootloaderCommands = ''
       base=$(mktemp -d)
-      cp "$bootloder" "$base/loader"
+      cp "$bootloader" "$base/loader"
       ${final.foobarRebuildInstallBootloaderSecureBootCommands}
       mv "$base/final.efi" "/boot/EFI/BOOT/BOOTX64.EFI"
       rm -rf "$base"

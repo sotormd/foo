@@ -51,7 +51,7 @@ let
       version = "0.0.1";
 
       # extra outputs - foobar adds diskImage
-      outputs = { inherit (final) diskImage; };
+      outputs = { inherit (final) diskImage bootloader; };
 
       # paths for system closure
       toplevel = {
@@ -174,6 +174,16 @@ let
       ${final.loadModules final.modules.initrd}
 
       echo initrd: finding real root
+      find_label() {
+          label="$1"
+
+          for dev in /dev/*; do
+              blkid "$dev" 2>/dev/null | grep -q "LABEL=\"$label\"" && {
+                  echo "$dev"
+                  return
+              }
+          done
+      }
       ${final.initrdFindRealRootCommands}
 
       echo initrd: mounting real root
@@ -192,17 +202,8 @@ let
     '';
 
     # find real root in initrd
+    # provides $boot and $root which can be used later
     initrdFindRealRootCommands = ''
-      find_label() {
-          label="$1"
-
-          for dev in /dev/*; do
-              blkid "$dev" 2>/dev/null | grep -q "LABEL=\"$label\"" && {
-                  echo "$dev"
-                  return
-              }
-          done
-      }
       boot=$(find_label FOOBAR-ESP)
       root=$(find_label FOOBAR-ROOT)
     '';
@@ -210,29 +211,59 @@ let
     # mount real root in initrd
     initrdMountRealRootCommands = ''
       # tmpfs rootfs
-      mkdir -p /root
-      mount -t tmpfs tmpfs /root
+      ${final.initrdMountRealRootTmpfsRootfsCommands}
 
       # persistent disk
-      mkdir -p /root/persist
-      mount -t xfs "$root" /root/persist
+      ${final.initrdMountRealRootPersistentDiskCommands}
 
       # boot
-      mkdir -p /root/boot
-      mount -t vfat "$boot" /root/boot
+      ${final.initrdMountRealRootBootCommands}
 
       # nix store
+      ${final.initrdMountRealRootNixStoreCommands}
+
+      # home
+      ${final.initrdMountRealRootHomeCommands}
+
+      # var
+      ${final.initrdMountRealRootVarCommands}
+    '';
+
+    # tmpfs rootfs
+    initrdMountRealRootTmpfsRootfsCommands = ''
+      mkdir -p /root
+      mount -t tmpfs tmpfs /root
+    '';
+
+    # persistent disk
+    initrdMountRealRootPersistentDiskCommands = ''
+      mkdir -p /root/persist
+      mount -t xfs "$root" /root/persist
+    '';
+
+    # boot
+    initrdMountRealRootBootCommands = ''
+      mkdir -p /root/boot
+      mount -t vfat "$boot" /root/boot
+    '';
+
+    # nix store
+    initrdMountRealRootNixStoreCommands = ''
       mkdir -p /root/nix
       mount -o bind /root/persist/nix /root/nix
       mount -o bind /root/nix/store /root/nix/store
       mount -o remount,ro,bind,nosuid,nodev /root/nix/store
+    '';
 
-      # home
+    # home
+    initrdMountRealRootHomeCommands = ''
       mkdir -p /root/persist/home
       mkdir -p /root/home
       mount -o bind,nosuid,nodev /root/persist/home /root/home
+    '';
 
-      # var
+    # var
+    initrdMountRealRootVarCommands = ''
       mkdir -p /root/persist/var
       mkdir -p /root/var
       mount -o bind,nosuid,nodev /root/persist/var /root/var
@@ -466,19 +497,18 @@ let
           echo rebuild: building uki
           uki=$(nix build -f "$FOOBAR_CONFIG" build.uki --no-link --print-out-paths)
 
-          echo rebuild: installing system closure to profile
+          echo rebuild: building bootloader
+          bootloader=$(nix build -f "$FOOBAR_CONFIG" build.bootloader --no-link --print-out-paths)
+
+          echo rebuild: installing system closure
           nix-env --profile /nix/var/nix/profiles/foobar/system --set "$closure"
           number=$(readlink /nix/var/nix/profiles/foobar/system | awk -F- '{ print $2 }')
 
           echo rebuild: installing uki
-          (
-            ${final.foobarRebuildInstallUkiCommands}
-          )
+          ${final.foobarRebuildInstallUkiCommands}
 
           echo rebuild: installing bootloader
-          (
-            ${final.foobarRebuildInstallBootloaderCommands}
-          )
+          ${final.foobarRebuildInstallBootloaderCommands}
 
       elif [ "$1" = "test" ]; then
 
@@ -497,7 +527,7 @@ let
     '';
     foobarRebuild = final.pkgs.writeScriptBin "foobar-rebuild" final.foobarRebuildCommands;
 
-    # install uki during foobar-rebuild
+    # install new uki during foobar-rebuild
     foobarRebuildInstallUkiCommands = ''
               base=$(mktemp -d)
               cp "$uki" "$base/uki"
@@ -510,15 +540,18 @@ let
               rm -rf "$base"
     '';
 
-    # install bootloader during foobar-rebuild
-    foobarRebuildInstallBootloaderCommands = ''
-      src="${final.pkgs.systemd}/lib/systemd/boot/efi/systemd-bootx64.efi"
-      dst="/boot/EFI/BOOT/BOOTX64.EFI"
+    # bootloader
+    bootloader = final.pkgs.runCommand "bootloader" { } ''
+      ln -sfn "${final.pkgs.systemd}/lib/systemd/boot/efi/systemd-bootx64.efi" $out
+    '';
 
+    # install bootloader during foobar-rebuild
+    # does not use a bootloader from the new generation
+    foobarRebuildInstallBootloaderCommands = ''
       base=$(mktemp -d)
-      cp "$src" "$base/loader"
+      cp "$bootloder" "$base/loader"
       ${final.foobarRebuildInstallBootloaderSecureBootCommands}
-      mv "$base/final.efi" "$dst"
+      mv "$base/final.efi" "/boot/EFI/BOOT/BOOTX64.EFI"
       rm -rf "$base"
     '';
 
@@ -546,8 +579,8 @@ let
           fi
 
           sbsign \
-            --key ${final.secureBootDir}/${final.secureBootKey} \
-            --cert ${final.secureBootDir}/${final.secureBootCert} \
+            --key "$key" \
+            --cert "$crt" \
             --output "$base/final.efi" \
             "$base/uki"
         ''
@@ -1042,7 +1075,7 @@ let
           SizeMaxBytes=200M
           Label=FOOBAR-ESP
           CopyFiles=${final.foo.build.uki}:/EFI/Linux/foobar-generation-1.efi
-          CopyFiles=${final.pkgs.systemd}/lib/systemd/boot/efi/systemd-bootx64.efi:/EFI/BOOT/BOOTX64.EFI
+          CopyFiles=${final.bootloader}:/EFI/BOOT/BOOTX64.EFI
           CopyFiles=${final.loaderConf}:/loader/loader.conf
           CopyFiles=${final.loaderEntry}:/loader/entries/foobar-generation-1.conf
           EOF

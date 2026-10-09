@@ -84,6 +84,20 @@ let
             name = "activate";
           }
 
+          # /run/current-system/install-uki
+          # install uki to /boot
+          {
+            source = final.installUki;
+            name = "install-uki";
+          }
+
+          # /run/current-system/install-bootloader
+          # install bootloader to /boot
+          {
+            source = final.installBootloader;
+            name = "install-bootloader";
+          }
+
           # /run/current-system/kernel-modules
           # kernel modules, like nixos /run/current-system/kernel-modules
           {
@@ -163,43 +177,50 @@ let
     };
 
     # commands to run in initrd
-    initrdCommands = ''
-      printf '\033[0m\033[39;49m\033[H\033[2J'
-      printf '\033[2J\033[H\033[0m\033[1;32m--initrd--\033[0m\n'
+    initrdCommands = builtins.concatStringsSep "\n" [
+      ''
+        printf '\033[0m\033[39;49m\033[H\033[2J'
+        printf '\033[2J\033[H\033[0m\033[1;32m--initrd--\033[0m\n'
+      ''
+      ''
+        echo initrd: creating basic filesystems
 
-      echo initrd: creating basic filesystems
-      ${final.initrdCreateBasicFilesystemsCommands}
+        mkdir -p /proc /sys /dev
+        mount -t proc proc /proc
+        mount -t sysfs sysfs /sys
+        mount -t devtmpfs devtmpfs /dev
+      ''
+      ''
+        echo initrd: load kernel modules
 
-      echo initrd: load kernel modules
-      ${final.loadModules final.modules.initrd}
+        ${final.loadModules final.modules.initrd}
+      ''
+      ''
+         echo initrd: finding real root
 
-      echo initrd: finding real root
-      find_label() {
-          label="$1"
+         find_label() {
+             label="$1"
 
-          for dev in /dev/*; do
-              blkid "$dev" 2>/dev/null | grep -q "LABEL=\"$label\"" && {
-                  echo "$dev"
-                  return
-              }
-          done
-      }
-      ${final.initrdFindRealRootCommands}
+             for dev in /dev/*; do
+                 blkid "$dev" 2>/dev/null | grep -q "LABEL=\"$label\"" && {
+                     echo "$dev"
+                     return
+                 }
+             done
+         }
+        ${final.initrdFindRealRootCommands}
+      ''
+      ''
+         echo initrd: mounting real root
 
-      echo initrd: mounting real root
-      ${final.initrdMountRealRootCommands}
+        ${final.initrdMountRealRootCommands}
+      ''
+      ''
+        echo initrd: switching to real root
 
-      echo initrd: switching to real root
-      exec switch_root /root "$BOOTED_CLOSURE/init"
-    '';
-
-    # create basic filesystems in initrd
-    initrdCreateBasicFilesystemsCommands = ''
-      mkdir -p /proc /sys /dev
-      mount -t proc proc /proc
-      mount -t sysfs sysfs /sys
-      mount -t devtmpfs devtmpfs /dev
-    '';
+        exec switch_root /root "$BOOTED_CLOSURE/init"
+      ''
+    ];
 
     # find real root in initrd
     # provides $boot and $root which can be used later
@@ -270,39 +291,49 @@ let
     '';
 
     # commands to run as PID 1 (init)
-    initCommands = ''
-      #!${final.sh}
+    initCommands = builtins.concatStringsSep "\n" [
+      ''
+        #!${final.sh}
 
-      ${final.busyboxPATH [ ]}
+        ${final.busyboxPATH [ ]}
 
-      printf '\033[0m\033[1;32m--init--\033[0m\n'
+        printf '\033[0m\033[1;32m--init--\033[0m\n'
 
-      if [ -z "$BOOTED_CLOSURE" ]; then
-          echo init: initrd did not provide BOOTED_CLOSURE >&2
-          exit 1
-      fi
+        if [ "$(id -u)" -ne 0 ]; then
+            echo init: must be run as root >&2
+            exit 1
+        fi
 
-      if ! [ -d "$BOOTED_CLOSURE" ]; then
-          echo init: unable to find BOOTED_CLOSURE "$BOOTED_CLOSURE" >&2
-          exit 1
-      fi
+        if [ -z "$BOOTED_CLOSURE" ]; then
+            echo init: initrd did not provide BOOTED_CLOSURE >&2
+            exit 1
+        fi
 
-      echo init: starting activation
+        if ! [ -d "$BOOTED_CLOSURE" ]; then
+            echo init: unable to find booted closure at "$BOOTED_CLOSURE" >&2
+            exit 1
+        fi
+      ''
+      ''
+        echo init: starting activation
 
-      env -i closure="$BOOTED_CLOSURE" "$BOOTED_CLOSURE/activate"
-      ln -sfn "$BOOTED_CLOSURE" /run/booted-system
-      unset BOOTED_CLOSURE
-
-      ${builtins.concatStringsSep "\n" (
-        map (x: ''
-          echo init: starting ${x.name}
-          mkdir -p /var/services/${x.name}
-          env -i ${x.exec} >/var/services/${x.name}/stdout 2>/var/services/${x.name}/stderr &
-        '') final.services
-      )}
-
-      exec ${final.stub}
-    '';
+        env -i closure="$BOOTED_CLOSURE" "$BOOTED_CLOSURE/activate"
+        ln -sfn "$BOOTED_CLOSURE" /run/booted-system
+        unset BOOTED_CLOSURE
+      ''
+      ''
+        ${builtins.concatStringsSep "\n" (
+          map (x: ''
+            echo init: starting ${x.name}
+            mkdir -p /var/services/${x.name}
+            env -i ${x.exec} >/var/services/${x.name}/stdout 2>/var/services/${x.name}/stderr &
+          '') final.services
+        )}
+      ''
+      ''
+        exec ${final.stub}
+      ''
+    ];
     init = final.pkgs.writeScript "init" final.initCommands;
 
     services = [
@@ -328,74 +359,103 @@ let
     # 3. mounting erofs /etc (atomic, idempotent) while keeping runtime state
     # 4. creating passwd/group/shadow (idempotent)
     # 5. setting up hostname (idempotent)
-    activateCommands = ''
-      #!${final.sh}
+    activateCommands = builtins.concatStringsSep "\n" [
+      ''
+        #!${final.sh}
 
-      ${final.busyboxPATH [
-        final.pkgs.util-linux # busybox mount/umount doesn't have --beneath/--recursive
-        final.wrappers.modprobe # wrapped modprobe to look for modules in the right place
-      ]}
+        ${final.busyboxPATH [
+          final.pkgs.util-linux # busybox mount/umount doesn't have --beneath/--recursive
+          final.wrappers.modprobe # wrapped modprobe to look for modules in the right place
+        ]}
 
-      umask 0022
+        umask 0022
 
-      if [ "$(id -u)" -ne 0 ]; then
-          echo "activate: must be run as root" >&2
-          exit 1
-      fi
+        if [ "$(id -u)" -ne 0 ]; then
+            echo activate: must be run as root >&2
+            exit 1
+        fi
 
-      # create and mount filesystems
-      # if not already mounted
-      mount_if_not_mounted() {
-          src="$1"
-          dst="$2"
-          shift 2
+        if [ -z "$closure" ]; then
+           echo activate: missing variable closure >&2
+           exit 1
+        fi
 
-          if ! grep -qs " $dst " /proc/self/mountinfo; then
-              mkdir -p "$dst"
-              mount "$@" "$src" "$dst"
-          fi
-      }
+        if ! [ -d "$closure" ]; then
+           echo activate: unable to find closure at "$closure" >&2
+           exit 1
+        fi
+      ''
+      ''
+        # create and mount filesystems
+        # if not already mounted
+        mount_if_not_mounted() {
+            src="$1"
+            dst="$2"
+            shift 2
 
-      # create and move mounts
-      move_mount() {
-          src="$1"
-          dst="$2"
+            if ! grep -qs " $dst " /proc/self/mountinfo; then
+                mkdir -p "$dst"
+                mount "$@" "$src" "$dst"
+            fi
+        }
 
-          if ! grep -qs " $dst " /proc/self/mountinfo; then
-              mkdir -p "$dst"
-              mount --move "$src" "$dst"
-          else
-              mount --move --beneath "$src" "$dst"
-              umount --lazy --recursive "$dst"
-          fi
-      }
+        # create and move mounts
+        move_mount() {
+            src="$1"
+            dst="$2"
 
-      echo activate: creating basic filesystems
+            if ! grep -qs " $dst " /proc/self/mountinfo; then
+                mkdir -p "$dst"
+                mount --move "$src" "$dst"
+            else
+                mount --move --beneath "$src" "$dst"
+                umount --lazy --recursive "$dst"
+            fi
+        }
+      ''
+      ''
+        echo activate: creating basic filesystems
 
-      # mount basic filesystems
-      mount_if_not_mounted devtmpfs /dev -o 'nosuid,strictatime,mode=755,size=5%' -t devtmpfs
-      mount_if_not_mounted devpts /dev/pts -o 'nosuid,noexec,mode=620,ptmxmode=0666,gid=3' -t devpts
-      mount_if_not_mounted tmpfs /dev/shm -o 'nosuid,nodev,strictatime,mode=1777,size=50%' -t tmpfs
-      mount_if_not_mounted proc /proc -o 'nosuid,noexec,nodev' -t proc
-      mount_if_not_mounted tmpfs /run -o 'nosuid,nodev,strictatime,mode=755,size=25%' -t tmpfs
-      mount_if_not_mounted sysfs /sys -o 'nosuid,noexec,nodev' -t sysfs
-      mount_if_not_mounted tmpfs /tmp -o 'nosuid,noexec,nodev' -t tmpfs
+        # mount basic filesystems
+        mount_if_not_mounted devtmpfs /dev -o 'nosuid,strictatime,mode=755,size=5%' -t devtmpfs
+        mount_if_not_mounted devpts /dev/pts -o 'nosuid,noexec,mode=620,ptmxmode=0666,gid=3' -t devpts
+        mount_if_not_mounted tmpfs /dev/shm -o 'nosuid,nodev,strictatime,mode=1777,size=50%' -t tmpfs
+        mount_if_not_mounted proc /proc -o 'nosuid,noexec,nodev' -t proc
+        mount_if_not_mounted tmpfs /run -o 'nosuid,nodev,strictatime,mode=755,size=25%' -t tmpfs
+        mount_if_not_mounted sysfs /sys -o 'nosuid,noexec,nodev' -t sysfs
+        mount_if_not_mounted tmpfs /tmp -o 'nosuid,noexec,nodev' -t tmpfs
 
-      # create basic filesystems
-      mkdir -p /var/tmp /var/empty /var/services
-      chmod 1777 /var/tmp
-      chmod 755 /var/empty
-      chmod 750 /var/services
+        # create basic filesystems
+        mkdir -p /var/tmp /var/empty /var/services
+        chmod 1777 /var/tmp
+        chmod 755 /var/empty
+        chmod 750 /var/services
+      ''
+      final.activateClosureCommands
+      final.activateModulesCommands
+      final.activateEtcCommands
+      final.activateUsersCommands
+      final.activateHostnameCommands
+    ];
+    activate = final.pkgs.writeScript "activate" final.activateCommands;
 
+    # link system closure during activation
+    activateClosureCommands = ''
       echo activate: linking system closure
 
       ln -sfn "$closure" /run/current-system
+    '';
 
+    # load kernel modules during activation
+    activateModulesCommands = ''
       echo activate: loading kernel modules
 
       ${final.loadModules final.modules.init}
       cat "${final.lib.getExe final.wrappers.modprobe}" > /proc/sys/kernel/modprobe
+    '';
 
+    # set up etc during activation
+    activateEtcCommands = ''
       echo activate: setting up etc
 
       # etc lowerdir
@@ -419,7 +479,10 @@ let
 
       # move overlay
       move_mount /run/etc.next/.overlay /etc
+    '';
 
+    # set up users and groups during activation
+    activateUsersCommands = ''
       echo activate: setting up users
 
       # shadow 
@@ -449,25 +512,22 @@ let
       mkdir -p /home/foo
       chown foo:foo /home/foo
       chmod 700 /home/foo
+    '';
 
+    # set system hostname during activation
+    activateHostnameCommands = ''
       echo activate: setting up hostname
 
       # set system hostname
       hostname $(cat /etc/hostname)
     '';
-    activate = final.pkgs.writeScript "activate" final.activateCommands;
 
     # foobar-rebuild
     # rebuild a new system generation
     foobarRebuildCommands = ''
       #!${final.sh}
 
-      ${final.busyboxPATH (
-        final.lib.flatten [
-          final.nixPackage
-          (final.lib.optional final.foobarRebuildSecureBootEnabled final.pkgs.sbsigntool)
-        ]
-      )}
+      ${final.busyboxPATH [ final.nixPackage ]}
 
       set -e
 
@@ -505,10 +565,10 @@ let
           number=$(readlink /nix/var/nix/profiles/foobar/system | awk -F- '{ print $2 }')
 
           echo rebuild: installing uki
-          ${final.foobarRebuildInstallUkiCommands}
+          env -i uki="$uki" "$closure/install-uki"
 
           echo rebuild: installing bootloader
-          ${final.foobarRebuildInstallBootloaderCommands}
+          env -i bootloader="$bootloader" "$closure/install-bootloader"
 
       elif [ "$1" = "test" ]; then
 
@@ -527,18 +587,40 @@ let
     '';
     foobarRebuild = final.pkgs.writeScriptBin "foobar-rebuild" final.foobarRebuildCommands;
 
-    # install new uki during foobar-rebuild
-    foobarRebuildInstallUkiCommands = ''
-              base=$(mktemp -d)
-              cp "$uki" "$base/uki"
-              ${final.foobarRebuildInstallUkiSecureBootCommands}
-              mv "$base/final.efi" "/boot/EFI/Linux/foobar-generation-$number.efi"
-              cat > "/boot/loader/entries/foobar-generation-$number.conf" <<EOF
+    # install new uki
+    installUkiCommands = ''
+      #!${final.sh}
+
+      ${final.busyboxPATH (
+        final.lib.flatten [ (final.lib.optional final.secureBootEnabled final.pkgs.sbsigntool) ]
+      )}
+
+      if [ "$(id -u)" -ne 0 ]; then
+          echo install-uki: must be run as root >&2
+          exit 1
+      fi
+
+      if [ -z "$uki" ]; then
+         echo install-uki: missing variable uki >&2
+         exit 1
+      fi
+
+      if ! [ -d "$uki" ]; then
+         echo install-uki: unable to find uki at "$uki" >&2
+         exit 1
+      fi
+
+      base=$(mktemp -d)
+      cp "$uki" "$base/uki"
+      ${final.installUkiSecureBootCommands}
+      mv "$base/final.efi" "/boot/EFI/Linux/foobar-generation-$number.efi"
+      cat > "/boot/loader/entries/foobar-generation-$number.conf" <<EOF
       title   foobar generation $number
       efi     /EFI/Linux/foobar-generation-$number.efi
       EOF
-              rm -rf "$base"
+      rm -rf "$base"
     '';
+    installUki = final.pkgs.writeScript "install-uki" final.installUkiCommands;
 
     # bootloader
     bootloader = final.pkgs.runCommand "bootloader" { } ''
@@ -546,39 +628,62 @@ let
     '';
 
     # install bootloader during foobar-rebuild
-    # does not use a bootloader from the new generation
-    foobarRebuildInstallBootloaderCommands = ''
+    installBootloaderCommands = ''
+      #!${final.sh}
+
+      set -e
+
+      ${final.busyboxPATH (
+        final.lib.flatten [ (final.lib.optional final.secureBootEnabled final.pkgs.sbsigntool) ]
+      )}
+
+      if [ "$(id -u)" -ne 0 ]; then
+          echo install-bootloader: must be run as root >&2
+          exit 1
+      fi
+
+      if [ -z "$bootloader" ]; then
+         echo install-bootloader: missing variable bootloader >&2
+         exit 1
+      fi
+
+      if ! [ -d "$bootloader" ]; then
+         echo install-bootloader: unable to find bootloader at "$bootloader" >&2
+         exit 1
+      fi
+
       base=$(mktemp -d)
       cp "$bootloader" "$base/loader"
-      ${final.foobarRebuildInstallBootloaderSecureBootCommands}
+      ${final.installBootloaderSecureBootCommands}
       mv "$base/final.efi" "/boot/EFI/BOOT/BOOTX64.EFI"
       rm -rf "$base"
     '';
+    installBootloader = final.pkgs.writeScript "install-bootloader" final.installBootloaderCommands;
 
     # secure boot key and certificate
     secureBootDir = "/var/secureboot";
     secureBootKey = "db.key";
     secureBootCert = "db.crt";
-    foobarRebuildSecureBootEnabled = false;
+    secureBootEnabled = false;
 
-    # for signed uki during foobar-rebuild
-    foobarRebuildInstallUkiSecureBootCommands =
-      if final.foobarRebuildSecureBootEnabled then
+    # for installing signed uki
+    installUkiSecureBootCommands =
+      if final.secureBootEnabled then
         ''
           key="${final.secureBootDir}/${final.secureBootKey}"
           crt="${final.secureBootDir}/${final.secureBootCert}"
 
           if ! [ -f "$key" ]; then
-             echo rebuild: secure boot key not found >&2
+             echo install-bootloader: secure boot key not found >&2
              exit 1
           fi
 
           if ! [ -f "$crt" ]; then
-             echo rebuild: secure boot cert not found >%2
+             echo install-bootloader: secure boot cert not found >%2
              exit 1
           fi
 
-          echo rebuild: signing uki (secureboot enabled)
+          echo install-bootloader: signing uki (secureboot enabled)
 
           sbsign \
             --key "$key" \
@@ -592,23 +697,23 @@ let
         '';
 
     # for signed bootloader during foobar-rebuild
-    foobarRebuildInstallBootloaderSecureBootCommands =
-      if final.foobarRebuildSecureBootEnabled then
+    installBootloaderSecureBootCommands =
+      if final.secureBootEnabled then
         ''
           key="${final.secureBootDir}/${final.secureBootKey}"
           crt="${final.secureBootDir}/${final.secureBootCert}"
 
           if ! [ -f "$key" ]; then
-             echo rebuild: secure boot key not found >&2
+             echo install-bootloader: secure boot key not found >&2
              exit 1
           fi
 
           if ! [ -f "$crt" ]; then
-             echo rebuild: secure boot cert not found >%2
+             echo install-bootloader: secure boot cert not found >%2
              exit 1
           fi
 
-          echo rebuild: signing bootloader (secureboot enabled)
+          echo install-bootloader: signing bootloader (secureboot enabled)
 
           sbsign \
             --key ${final.secureBootDir}/${final.secureBootKey} \
@@ -666,7 +771,7 @@ let
       echo "secureboot:     private key $key"
       echo "secureboot:     certificate $crt"
       echo secureboot: to install signed uki and bootloader :-
-      echo "secureboot:     rebuild foobar with foobarRebuildSecureBootEnabled set to true"
+      echo "secureboot:     rebuild foobar with secureBootEnabled set to true"
     '';
 
     # wrapped foobar-rebuild
@@ -715,7 +820,7 @@ let
 
       final.pkgs.busybox
 
-      (final.lib.optional final.foobarRebuildSecureBootEnabled [
+      (final.lib.optional final.secureBootEnabled [
         final.pkgs.sbctl
         final.pkgs.sbsigntool
       ])

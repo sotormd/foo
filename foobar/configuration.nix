@@ -683,7 +683,7 @@ let
              exit 1
           fi
 
-          echo install-bootloader: signing uki (secureboot enabled)
+          echo install-bootloader: signing uki, secureboot enabled
 
           sbsign \
             --key "$key" \
@@ -713,7 +713,7 @@ let
              exit 1
           fi
 
-          echo install-bootloader: signing bootloader (secureboot enabled)
+          echo install-bootloader: signing bootloader, secureboot enabled
 
           sbsign \
             --key ${final.secureBootDir}/${final.secureBootKey} \

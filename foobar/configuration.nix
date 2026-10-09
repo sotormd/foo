@@ -605,7 +605,7 @@ let
          exit 1
       fi
 
-      if ! [ -d "$uki" ]; then
+      if ! [ -f "$uki" ]; then
          echo install-uki: unable to find uki at "$uki" >&2
          exit 1
       fi
@@ -647,7 +647,7 @@ let
          exit 1
       fi
 
-      if ! [ -d "$bootloader" ]; then
+      if ! [ -f "$bootloader" ]; then
          echo install-bootloader: unable to find bootloader at "$bootloader" >&2
          exit 1
       fi

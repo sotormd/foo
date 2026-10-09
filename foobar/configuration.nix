@@ -51,7 +51,7 @@ let
       version = "0.0.1";
 
       # extra outputs - foobar adds diskImage
-      outputs = { inherit (final) diskImage bootloader; };
+      outputs = { inherit (final) diskImage bootloader foobarRebuild; };
 
       # paths for system closure
       toplevel = {
@@ -578,6 +578,8 @@ let
              exit 1
           fi
 
+          echo rebuild: signing uki (secureboot enabled)
+
           sbsign \
             --key "$key" \
             --cert "$crt" \
@@ -605,6 +607,8 @@ let
              echo rebuild: secure boot cert not found >%2
              exit 1
           fi
+
+          echo rebuild: signing bootloader (secureboot enabled)
 
           sbsign \
             --key ${final.secureBootDir}/${final.secureBootKey} \
@@ -665,12 +669,39 @@ let
       echo "secureboot:     rebuild foobar with foobarRebuildSecureBootEnabled set to true"
     '';
 
+    # wrapped foobar-rebuild
+    # this builds and runs foobar-rebuild of the next generation
+    foobarRebuildWrapped = final.pkgs.writeScriptBin "foobar-rebuild" ''
+      #!${final.sh}
+
+      ${final.busyboxPATH [ ]}
+
+
+      if [ "$(id -u)" -ne 0 ]; then
+          echo rebuild: must be run as root >&2
+          exit 1
+      fi
+
+      if [ "$1" != "test"  ] && [ "$1" != "boot" ] && [ "$1" != "switch" ]; then
+          echo "rebuild: expected verb: test, boot or switch"
+          exit 1
+      fi
+
+      if [ -z "$FOOBAR_CONFIG" ]; then
+          echo rebuild: environment variable FOOBAR_CONFIG unset >&2
+          exit 1
+      fi
+
+      rebuild=$(nix build -f "$FOOBAR_CONFIG" build.foobarRebuild --no-link --print-out-paths)
+      exec "$rebuild/bin/foobar-rebuild" "$@"
+    '';
+
     # software to include in system closure
     # basically the same as nixos /run/current-system/sw
     softwarePaths = final.lib.flatten [
 
       final.nixPackage
-      final.foobarRebuild
+      final.foobarRebuildWrapped
       final.foobarGenerateSecureBootKeys
 
       final.pkgs.git

@@ -674,8 +674,9 @@ let
     foobarRebuildWrapped = final.pkgs.writeScriptBin "foobar-rebuild" ''
       #!${final.sh}
 
-      ${final.busyboxPATH [ ]}
+      set -e
 
+      ${final.busyboxPATH [ final.nixPackage ]}
 
       if [ "$(id -u)" -ne 0 ]; then
           echo rebuild: must be run as root >&2

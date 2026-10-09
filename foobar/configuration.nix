@@ -565,7 +565,7 @@ let
           number=$(readlink /nix/var/nix/profiles/foobar/system | awk -F- '{ print $2 }')
 
           echo rebuild: installing uki
-          env -i uki="$uki" "$closure/install-uki"
+          env -i uki="$uki" number="$number" "$closure/install-uki"
 
           echo rebuild: installing bootloader
           env -i bootloader="$bootloader" "$closure/install-bootloader"
@@ -602,6 +602,11 @@ let
 
       if [ -z "$uki" ]; then
          echo install-uki: missing variable uki >&2
+         exit 1
+      fi
+
+      if [ -z "$number" ]; then
+         echo install-uki: missing variable number >&2
          exit 1
       fi
 
@@ -683,8 +688,6 @@ let
              exit 1
           fi
 
-          echo install-bootloader: signing uki, secureboot enabled
-
           sbsign \
             --key "$key" \
             --cert "$crt" \
@@ -712,8 +715,6 @@ let
              echo install-bootloader: secure boot cert not found >%2
              exit 1
           fi
-
-          echo install-bootloader: signing bootloader, secureboot enabled
 
           sbsign \
             --key ${final.secureBootDir}/${final.secureBootKey} \

@@ -376,13 +376,13 @@ let
         fi
 
         if [ -z "$closure" ]; then
-           echo activate: missing variable closure >&2
-           exit 1
+            echo activate: missing variable closure >&2
+            exit 1
         fi
 
         if ! [ -d "$closure" ]; then
-           echo activate: unable to find closure at "$closure" >&2
-           exit 1
+            echo activate: unable to find closure at "$closure" >&2
+            exit 1
         fi
       ''
       ''
@@ -601,18 +601,18 @@ let
       fi
 
       if [ -z "$uki" ]; then
-         echo install-uki: missing variable uki >&2
-         exit 1
+          echo install-uki: missing variable uki >&2
+          exit 1
       fi
 
       if [ -z "$number" ]; then
-         echo install-uki: missing variable number >&2
-         exit 1
+          echo install-uki: missing variable number >&2
+          exit 1
       fi
 
       if ! [ -f "$uki" ]; then
-         echo install-uki: unable to find uki at "$uki" >&2
-         exit 1
+          echo install-uki: unable to find uki at "$uki" >&2
+          exit 1
       fi
 
       base=$(mktemp -d)
@@ -648,13 +648,13 @@ let
       fi
 
       if [ -z "$bootloader" ]; then
-         echo install-bootloader: missing variable bootloader >&2
-         exit 1
+          echo install-bootloader: missing variable bootloader >&2
+          exit 1
       fi
 
       if ! [ -f "$bootloader" ]; then
-         echo install-bootloader: unable to find bootloader at "$bootloader" >&2
-         exit 1
+          echo install-bootloader: unable to find bootloader at "$bootloader" >&2
+          exit 1
       fi
 
       base=$(mktemp -d)
@@ -679,13 +679,13 @@ let
           crt="${final.secureBootDir}/${final.secureBootCert}"
 
           if ! [ -f "$key" ]; then
-             echo install-bootloader: secure boot key not found >&2
-             exit 1
+              echo install-bootloader: secure boot key not found >&2
+              exit 1
           fi
 
           if ! [ -f "$crt" ]; then
-             echo install-bootloader: secure boot cert not found >%2
-             exit 1
+              echo install-bootloader: secure boot cert not found >%2
+              exit 1
           fi
 
           sbsign \
@@ -707,13 +707,13 @@ let
           crt="${final.secureBootDir}/${final.secureBootCert}"
 
           if ! [ -f "$key" ]; then
-             echo install-bootloader: secure boot key not found >&2
-             exit 1
+              echo install-bootloader: secure boot key not found >&2
+              exit 1
           fi
 
           if ! [ -f "$crt" ]; then
-             echo install-bootloader: secure boot cert not found >%2
-             exit 1
+              echo install-bootloader: secure boot cert not found >%2
+              exit 1
           fi
 
           sbsign \
@@ -738,14 +738,19 @@ let
       key="${final.secureBootDir}/${final.secureBootKey}"
       crt="${final.secureBootDir}/${final.secureBootCert}"
 
+      if [ "$(id -u)" -ne 0 ]; then
+          echo secureboot: must be run as root >&2
+          exit 1
+      fi
+
       if [ -f "$key" ]; then
-         echo secureboot: secure boot key already exists >&2
-         exit 1
+          echo secureboot: secure boot key already exists >&2
+          exit 1
       fi
 
       if [ -f "$crt" ]; then
-         echo secureboot: secure boot cert already exists >%2
-         exit 1
+          echo secureboot: secure boot cert already exists >%2
+          exit 1
       fi
 
       echo secureboot: creating ${final.secureBootDir}
@@ -773,6 +778,67 @@ let
       echo "secureboot:     certificate $crt"
       echo secureboot: to install signed uki and bootloader :-
       echo "secureboot:     rebuild foobar with secureBootEnabled set to true"
+    '';
+
+    # enroll secure boot keys
+    foobarEnrollSecureBootKeys = final.pkgs.writeScriptBin "foobar-enroll-secureboot-keys" ''
+      #!${final.sh}
+
+      set -e
+
+      ${final.busyboxPATH [ final.pkgs.efitools ]}
+
+      if [ "$(id -u)" -ne 0 ]; then
+          echo secureboot: must be run as root >&2
+          exit 1
+      fi
+
+      efivars=/sys/firmware/efi/efivars
+      guid=8be4df61-93ca-11d2-aa0d-00e098032b8c
+
+      if ! [ -d "$efivars" ]; then
+          echo secureboot: EFI firmware variables not found >&2
+          echo secureboot: boot in UEFI mode >&2
+          exit 1
+      fi
+
+      if ! grep -qs "efivars" /proc/mounts; then
+          echo secureboot: efivars is not mounted >&2
+          exit 1
+      fi
+
+      setup_mode_file="$efivars/SetupMode-$guid"
+
+      if ! [ -r "$setup_mode_file" ]; then
+          echo secureboot: cannot read firmware Setup Mode >&2
+          exit 1
+      fi
+
+      setup_mode=$(od -An -tu1 -j4 -N1 "$setup_mode_file | tr -d ' ')
+
+      if [ "$setup_mode" != "1"]; then
+          echo secureboot: firmware is not in Setup Mode >&2
+          exit 1
+      fi
+
+      crt="${final.secureBootDir}/${final.secureBootCert}"
+
+      if ! [ -f "$crt" ]; then
+          echo secureboot: secure boot cert not found >&2
+          exit 1
+      fi
+
+      esl=$(mktemp)
+      trap 'rm -f "$esl"' EXIT
+
+      echo secureboot: creating EFI signature list
+      cert-to-efi-sig-list "$crt" "$esl"
+
+      echo secureboot: appending certificate to firmware db
+      efi-updatevar -a -e -f "$esl" db
+
+      echo secureboot: enrollment request completed
+      echo secureboot: reboot and verify firmware db
     '';
 
     # wrapped foobar-rebuild
@@ -809,7 +875,9 @@ let
 
       final.nixPackage
       final.foobarRebuildWrapped
+
       final.foobarGenerateSecureBootKeys
+      final.foobarEnrollSecureBootKeys
 
       final.pkgs.git
 

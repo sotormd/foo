@@ -698,7 +698,7 @@ let
           fi
 
           if ! [ -f "$crt" ]; then
-              echo install-bootloader: secure boot cert not found >%2
+              echo install-bootloader: secure boot cert not found >&2
               exit 1
           fi
 
@@ -726,7 +726,7 @@ let
           fi
 
           if ! [ -f "$crt" ]; then
-              echo install-bootloader: secure boot cert not found >%2
+              echo install-bootloader: secure boot cert not found >&2
               exit 1
           fi
 
@@ -763,7 +763,7 @@ let
       fi
 
       if [ -f "$crt" ]; then
-          echo secureboot: secure boot cert already exists >%2
+          echo secureboot: secure boot cert already exists >&2
           exit 1
       fi
 

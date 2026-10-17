@@ -54,15 +54,16 @@ or checked.
 An example system, "foobar", is provided which uses foo to build a minimal
 system with:
 
+1. Simple shell script as init (PID 1)
 1. Activation and system closure with familiar `sw` and `etc`
-2. `/etc` as an overlay with an immutable erofs lower and writable tmpfs upper
-3. Impermanence (tmpfs) with persistent `/nix`, `/var`, `/home`
-4. Multi-user Nix with read-only `/nix/store` and `nix-daemon` in a private
+1. `/etc` as an overlay with an immutable erofs lower and writable tmpfs upper
+1. Impermanence (tmpfs) with persistent `/nix`, `/var`, `/home`
+1. Multi-user Nix with read-only `/nix/store` and `nix-daemon` in a private
    mount namespace
-5. System generations using Nix Profiles, and switching with `foobar-rebuild`
-6. Basic networking and SSL certificates
-7. Disk image with `systemd-repart` and `systemd-boot` bootloader
-8. Secure Boot support with `sbctl` and `sbsigntool`
+1. System generations using Nix Profiles, and switching with `foobar-rebuild`
+1. Basic networking and SSL certificates
+1. Disk image with `systemd-repart` and `systemd-boot` bootloader
+1. Secure Boot support with `sbctl` and `sbsigntool`
 
 foobar's [configuration](./foobar/configuration.nix) can also be extended using
 `.extend` (for eg, to add services).

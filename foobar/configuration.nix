@@ -846,10 +846,6 @@ let
 
       final.pkgs.busybox
 
-      final.pkgs.sbctl
-      final.pkgs.mokutil
-      final.pkgs.sbsigntool
-
     ];
     software = final.pkgs.buildEnv {
       name = "software";

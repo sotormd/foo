@@ -38,7 +38,7 @@ default, only the init script is included. The foo build outputs are:
 
 Additional build outputs can be added using the `outputs` option. For example,
 foo has no "disk image" output, but the [foobar](#foobar) example system adds
-this output.
+a `diskImage` output, along with `bootloader` and `foobarRebuild`.
 
 To produce an options doc (markdown):
 
@@ -62,6 +62,7 @@ system with:
 5. System generations using Nix Profiles, and switching with `foobar-rebuild`
 6. Basic networking and SSL certificates
 7. Disk image with `systemd-repart` and `systemd-boot` bootloader
+8. Secure Boot support with `sbctl` and `sbsigntool`
 
 foobar's [configuration](./foobar/configuration.nix) can also be extended using
 `.extend` (for eg, to add services).

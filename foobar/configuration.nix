@@ -173,6 +173,9 @@ let
         # graphics
         "virtio_gpu"
 
+        # efivarfs
+        "efivarfs"
+
       ];
     };
 
@@ -413,31 +416,35 @@ let
             fi
         }
       ''
-      ''
-        echo activate: creating basic filesystems
-
-        # mount basic filesystems
-        mount_if_not_mounted devtmpfs /dev -o 'nosuid,strictatime,mode=755,size=5%' -t devtmpfs
-        mount_if_not_mounted devpts /dev/pts -o 'nosuid,noexec,mode=620,ptmxmode=0666,gid=3' -t devpts
-        mount_if_not_mounted tmpfs /dev/shm -o 'nosuid,nodev,strictatime,mode=1777,size=50%' -t tmpfs
-        mount_if_not_mounted proc /proc -o 'nosuid,noexec,nodev' -t proc
-        mount_if_not_mounted tmpfs /run -o 'nosuid,nodev,strictatime,mode=755,size=25%' -t tmpfs
-        mount_if_not_mounted sysfs /sys -o 'nosuid,noexec,nodev' -t sysfs
-        mount_if_not_mounted tmpfs /tmp -o 'nosuid,noexec,nodev' -t tmpfs
-
-        # create basic filesystems
-        mkdir -p /var/tmp /var/empty /var/services
-        chmod 1777 /var/tmp
-        chmod 755 /var/empty
-        chmod 750 /var/services
-      ''
+      final.activateFilesystemsCommands
       final.activateClosureCommands
       final.activateModulesCommands
+      final.activateEfivarsCommands
       final.activateEtcCommands
       final.activateUsersCommands
       final.activateHostnameCommands
     ];
     activate = final.pkgs.writeScript "activate" final.activateCommands;
+
+    # mount basic filesystems during activation
+    activateFilesystemsCommands = ''
+      echo activate: creating basic filesystems
+
+      # mount basic filesystems
+      mount_if_not_mounted devtmpfs /dev -o 'nosuid,strictatime,mode=755,size=5%' -t devtmpfs
+      mount_if_not_mounted devpts /dev/pts -o 'nosuid,noexec,mode=620,ptmxmode=0666,gid=3' -t devpts
+      mount_if_not_mounted tmpfs /dev/shm -o 'nosuid,nodev,strictatime,mode=1777,size=50%' -t tmpfs
+      mount_if_not_mounted proc /proc -o 'nosuid,noexec,nodev' -t proc
+      mount_if_not_mounted tmpfs /run -o 'nosuid,nodev,strictatime,mode=755,size=25%' -t tmpfs
+      mount_if_not_mounted sysfs /sys -o 'nosuid,noexec,nodev' -t sysfs
+      mount_if_not_mounted tmpfs /tmp -o 'nosuid,noexec,nodev' -t tmpfs
+
+      # create basic filesystems
+      mkdir -p /var/tmp /var/empty /var/services
+      chmod 1777 /var/tmp
+      chmod 755 /var/empty
+      chmod 750 /var/services
+    '';
 
     # link system closure during activation
     activateClosureCommands = ''
@@ -452,6 +459,13 @@ let
 
       ${final.loadModules final.modules.init}
       cat "${final.lib.getExe final.wrappers.modprobe}" > /proc/sys/kernel/modprobe
+    '';
+
+    # mount efivars
+    activateEfivarsCommands = ''
+      echo activate: mounting efivars
+
+      mount_if_not_mounted efivarfs /sys/firmware/efi/efivars -o 'nosuid,noexec,nodev' -t efivarfs
     '';
 
     # set up etc during activation
@@ -666,9 +680,9 @@ let
     installBootloader = final.pkgs.writeScript "install-bootloader" final.installBootloaderCommands;
 
     # secure boot key and certificate
-    secureBootDir = "/var/secureboot";
+    secureBootDir = "/var/lib/sbctl/keys/db";
     secureBootKey = "db.key";
-    secureBootCert = "db.crt";
+    secureBootCert = "db.pem";
     secureBootEnabled = false;
 
     # for installing signed uki
@@ -733,7 +747,7 @@ let
 
       set -e
 
-      ${final.busyboxPATH [ final.pkgs.openssl ]}
+      ${final.busyboxPATH [ final.pkgs.sbctl ]}
 
       key="${final.secureBootDir}/${final.secureBootKey}"
       crt="${final.secureBootDir}/${final.secureBootCert}"
@@ -759,19 +773,7 @@ let
 
       echo secureboot: generating keys
 
-      openssl req \
-        -new \
-        -x509 \
-        -newkey rsa:2048 \
-        -sha256 \
-        -nodes \
-        -days 3650 \
-        -subj "/CN=foobar Secure Boot/" \
-        -keyout "$key" \
-        -out "$crt"
-
-      chmod 600 "$key"
-      chmod 644 "$crt"
+      sbctl create-keys
 
       echo secureboot: generated :-
       echo "secureboot:     private key $key"
@@ -786,59 +788,16 @@ let
 
       set -e
 
-      ${final.busyboxPATH [ final.pkgs.efitools ]}
+      ${final.busyboxPATH [ final.pkgs.sbctl ]}
 
       if [ "$(id -u)" -ne 0 ]; then
           echo secureboot: must be run as root >&2
           exit 1
       fi
 
-      efivars=/sys/firmware/efi/efivars
-      guid=8be4df61-93ca-11d2-aa0d-00e098032b8c
-
-      if ! [ -d "$efivars" ]; then
-          echo secureboot: EFI firmware variables not found >&2
-          echo secureboot: boot in UEFI mode >&2
-          exit 1
-      fi
-
-      if ! grep -qs "efivars" /proc/mounts; then
-          echo secureboot: efivars is not mounted >&2
-          exit 1
-      fi
-
-      setup_mode_file="$efivars/SetupMode-$guid"
-
-      if ! [ -r "$setup_mode_file" ]; then
-          echo secureboot: cannot read firmware Setup Mode >&2
-          exit 1
-      fi
-
-      setup_mode=$(od -An -tu1 -j4 -N1 "$setup_mode_file | tr -d ' ')
-
-      if [ "$setup_mode" != "1"]; then
-          echo secureboot: firmware is not in Setup Mode >&2
-          exit 1
-      fi
-
-      crt="${final.secureBootDir}/${final.secureBootCert}"
-
-      if ! [ -f "$crt" ]; then
-          echo secureboot: secure boot cert not found >&2
-          exit 1
-      fi
-
-      esl=$(mktemp)
-      trap 'rm -f "$esl"' EXIT
-
-      echo secureboot: creating EFI signature list
-      cert-to-efi-sig-list "$crt" "$esl"
-
-      echo secureboot: appending certificate to firmware db
-      efi-updatevar -a -e -f "$esl" db
+      sbctl enroll-keys --microsoft
 
       echo secureboot: enrollment request completed
-      echo secureboot: reboot and verify firmware db
     '';
 
     # wrapped foobar-rebuild
@@ -889,10 +848,9 @@ let
 
       final.pkgs.busybox
 
-      (final.lib.optional final.secureBootEnabled [
-        final.pkgs.sbctl
-        final.pkgs.sbsigntool
-      ])
+      final.pkgs.sbctl
+      final.pkgs.mokutil
+      final.pkgs.sbsigntool
 
     ];
     software = final.pkgs.buildEnv {

@@ -767,10 +767,6 @@ let
           exit 1
       fi
 
-      echo secureboot: creating ${final.secureBootDir}
-
-      install -d -m 0700 ${final.secureBootDir}
-
       echo secureboot: generating keys
 
       sbctl create-keys
@@ -794,6 +790,8 @@ let
           echo secureboot: must be run as root >&2
           exit 1
       fi
+
+      echo secureboot: enrolling keys
 
       sbctl enroll-keys --microsoft
 

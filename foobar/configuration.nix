@@ -27,8 +27,8 @@ let
 
     sources = {
       nixpkgs = {
-        commit = "e554fab72f81915600f3f449b786fd9af40439a5";
-        hash = "sha256-ZKhUe/2IJUq1JhKxKMu8rbkgSGmPP2ZCqlIPn40aGCM=";
+        commit = "7fd4004d0511991fff3a0524856a9be09e28c5f0";
+        hash = "sha256-i5qk1kLiit98rRbh1AXmWBNT9QXC/y4l5Wk/u5EdpDQ=";
       };
     };
 

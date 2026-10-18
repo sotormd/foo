@@ -45,14 +45,19 @@ let
     foo = final.buildFoo { inherit (final) config pkgs; };
 
     # generation
-    # contains toplevel, uki, bootloader, foobarRebuild
+    # contains toplevel, kernel, initrd, uki, bootloader, foobarRebuild, installUki, installBootloader
+    #
+    # any change to this -> new generation
     generation =
       final.pkgs.runCommand "foobar-generation"
         {
           inherit (final.foo.build)
+            kernel
+            initrd
             uki
-            bootloader
             toplevel
+
+            bootloader
             foobarRebuild
             installUki
             installBootloader
@@ -61,13 +66,15 @@ let
         ''
           mkdir -p "$out"
 
+          ln -s "$kernel" "$out/kernel"
+          ln -s "$initrd" "$out/initrd"
           ln -s "$uki" "$out/uki"
-          ln -s "$bootloader" "$out/bootloader"
           ln -s "$toplevel" "$out/toplevel"
 
-          ln -s "$foobar-rebuild" "$out/foobar-rebuild"
-          ln -s "$install-uki" "$out/install-uki"
-          ln -s "$install-bootloader" "$out/install-bootloader"
+          ln -s "$bootloader" "$out/bootloader"
+          ln -s "$foobarRebuild" "$out/foobar-rebuild"
+          ln -s "$installUki" "$out/install-uki"
+          ln -s "$installBootloader" "$out/install-bootloader"
         '';
 
     # buildFoo foo version
@@ -345,7 +352,7 @@ let
         fi
       ''
       ''
-        echo init: starting activation
+        echo init: activating system closure
 
         env -i closure="$BOOTED_CLOSURE" "$BOOTED_CLOSURE/activate"
         ln -sfn "$BOOTED_CLOSURE" /run/booted-system
@@ -609,8 +616,8 @@ let
           uki=$(realpath "$generation/uki")
           bootloader=$(realpath "$generation/bootloader")
 
-          echo rebuild: installing system closure
-          nix-env --profile /nix/var/nix/profiles/foobar/system --set "$closure"
+          echo rebuild: installing system generation
+          nix-env --profile /nix/var/nix/profiles/foobar/system --set "$generation"
           number=$(readlink /nix/var/nix/profiles/foobar/system | awk -F- '{ print $2 }')
 
           echo rebuild: installing uki
@@ -627,7 +634,7 @@ let
 
       if [ "$1" = "test" ] || [ "$1" = "switch" ]; then
 
-          echo rebuild: starting activation
+          echo rebuild: activating system closure
           env -i closure="$closure" "$closure/activate"
 
       fi

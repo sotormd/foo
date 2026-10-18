@@ -1,4 +1,4 @@
-name: Build Foobar Disk
+name: Build foobar Disk
 
 on:
   push:

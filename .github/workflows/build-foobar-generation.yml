@@ -1,4 +1,4 @@
-name: Build Foobar Generation
+name: Build foobar Generation
 
 on:
   push:

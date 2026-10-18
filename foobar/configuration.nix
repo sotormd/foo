@@ -44,96 +44,93 @@ let
     # the foo build outputs
     foo = final.buildFoo { inherit (final) config pkgs; };
 
+    # buildFoo foo version
+    version = "0.0.1";
+
+    # extra outputs
+    extraOutputs = { inherit (final) diskImage bootloader foobarRebuild; };
+
     # foo configuration
     config = {
-
-      # buildFoo foo version
-      version = "0.0.1";
-
-      # extra outputs - foobar adds diskImage
-      outputs = { inherit (final) diskImage bootloader foobarRebuild; };
-
-      # paths for system closure
+      inherit (final) version;
+      outputs = final.extraOutputs;
       toplevel = {
-
-        # init to use
         inherit (final) init;
-
-        # other paths
-        paths = [
-
-          # /run/current-system/sw
-          # software, like nixos /run/current-system/sw
-          {
-            source = final.software;
-            name = "sw";
-          }
-
-          # /run/current-system/etc
-          # etc, like nixos /run/current-system/etc
-          # this is an erofs image
-          {
-            source = final.etcErofs;
-            name = "etc";
-          }
-
-          # /run/current-system/activate
-          # activation script, like nixos /run/current-system/activate
-          {
-            source = final.activate;
-            name = "activate";
-          }
-
-          # /run/current-system/install-uki
-          # install uki to /boot
-          {
-            source = final.installUki;
-            name = "install-uki";
-          }
-
-          # /run/current-system/install-bootloader
-          # install bootloader to /boot
-          {
-            source = final.installBootloader;
-            name = "install-bootloader";
-          }
-
-          # /run/current-system/kernel-modules
-          # kernel modules, like nixos /run/current-system/kernel-modules
-          {
-            source = final.pkgs.makeModulesClosure {
-              rootModules = final.modules.init;
-              firmware = [ final.pkgs.emptyDirectory ];
-              kernel = final.config.kernel.packages.kernel.modules;
-            };
-            name = "kernel-modules";
-          }
-
-        ];
-
+        paths = final.toplevelPaths;
       };
-
-      # kernel to use
       kernel = {
-        packages = final.pkgs.linuxPackages;
-        params = [
-          "console=ttyS0"
-          "earlycon=uart8250,io,0x3f8,115200"
-          "quiet"
-          "loglevel=0"
-          "ipv6.disable=1"
-        ];
+        packages = final.kernelPackages;
+        params = final.kernelParams;
       };
-
-      # initrd to use
       initrd = {
-        modules = final.modules.initrd;
-        interpreter = "/bin/sh";
-        packages = [ final.pkgs.busybox ];
+        modules = final.initrdModules;
+        interpreter = final.initrdInterpreter;
+        packages = final.initrdPackages;
         commands = final.initrdCommands;
       };
-
     };
+
+    # toplevel paths
+    toplevelPaths = [
+
+      # /run/current-system/sw
+      # software, like nixos /run/current-system/sw
+      {
+        source = final.software;
+        name = "sw";
+      }
+
+      # /run/current-system/etc
+      # etc, like nixos /run/current-system/etc
+      # this is an erofs image
+      {
+        source = final.etcErofs;
+        name = "etc";
+      }
+
+      # /run/current-system/activate
+      # activation script, like nixos /run/current-system/activate
+      {
+        source = final.activate;
+        name = "activate";
+      }
+
+      # /run/current-system/install-uki
+      # install uki to /boot
+      {
+        source = final.installUki;
+        name = "install-uki";
+      }
+
+      # /run/current-system/install-bootloader
+      # install bootloader to /boot
+      {
+        source = final.installBootloader;
+        name = "install-bootloader";
+      }
+
+      # /run/current-system/kernel-modules
+      # kernel modules, like nixos /run/current-system/kernel-modules
+      {
+        source = final.pkgs.makeModulesClosure {
+          rootModules = final.initModules;
+          firmware = [ final.pkgs.emptyDirectory ];
+          kernel = final.config.kernel.packages.kernel.modules;
+        };
+        name = "kernel-modules";
+      }
+
+    ];
+
+    # kernel to use
+    kernelPackages = final.pkgs.linuxPackages;
+    kernelParams = [
+      "console=ttyS0"
+      "earlycon=uart8250,io,0x3f8,115200"
+      "quiet"
+      "loglevel=0"
+      "ipv6.disable=1"
+    ];
 
     # create a PATH from nix packages
     makePATH = packages: final.lib.concatStringsSep ":" (map (x: "${x}/bin") packages);
@@ -146,38 +143,42 @@ let
     # sh for most scripts
     sh = final.lib.getExe' final.pkgs.busybox "sh";
 
+    # initrd interpreter
+    initrdInterpreter = "/bin/sh";
+
+    # initrd packages
+    initrdPackages = [ final.pkgs.busybox ];
+
     # kernel modules that we need
     # adding things here will add it to respective makeModulesClosure
     # and also import them using loadModules
-    modules = {
-      initrd = [
-        "ahci"
-        "sd_mod"
-        "xfs"
-        "vfat"
-        "nls_cp437"
-        "nls_iso8859-1"
-      ];
-      init = [
+    initrdModules = [
+      "ahci"
+      "sd_mod"
+      "xfs"
+      "vfat"
+      "nls_cp437"
+      "nls_iso8859-1"
+    ];
+    initModules = [
 
-        # required for /etc
-        "erofs"
-        "overlay"
+      # required for /etc
+      "erofs"
+      "overlay"
 
-        # required for networking
-        "virtio"
-        "virtio_net"
-        "virtio_pci"
-        "af_packet"
+      # required for networking
+      "virtio"
+      "virtio_net"
+      "virtio_pci"
+      "af_packet"
 
-        # graphics
-        "virtio_gpu"
+      # graphics
+      "virtio_gpu"
 
-        # efivarfs
-        "efivarfs"
+      # efivarfs
+      "efivarfs"
 
-      ];
-    };
+    ];
 
     # commands to run in initrd
     initrdCommands = builtins.concatStringsSep "\n" [
@@ -188,15 +189,12 @@ let
       ''
         echo initrd: creating basic filesystems
 
-        mkdir -p /proc /sys /dev
-        mount -t proc proc /proc
-        mount -t sysfs sysfs /sys
-        mount -t devtmpfs devtmpfs /dev
+        ${final.initrdFilesystemsCommands}
       ''
       ''
         echo initrd: load kernel modules
 
-        ${final.loadModules final.modules.initrd}
+        ${final.loadModules final.initrdModules}
       ''
       ''
          echo initrd: finding real root
@@ -224,6 +222,14 @@ let
         exec switch_root /root "$BOOTED_CLOSURE/init"
       ''
     ];
+
+    # create basic filesystems in initrd
+    initrdFilesystemsCommands = ''
+      mkdir -p /proc /sys /dev
+      mount -t proc proc /proc
+      mount -t sysfs sysfs /sys
+      mount -t devtmpfs devtmpfs /dev
+    '';
 
     # find real root in initrd
     # provides $boot and $root which can be used later
@@ -416,20 +422,41 @@ let
             fi
         }
       ''
-      final.activateFilesystemsCommands
-      final.activateClosureCommands
-      final.activateModulesCommands
-      final.activateEfivarsCommands
-      final.activateEtcCommands
-      final.activateUsersCommands
-      final.activateHostnameCommands
+      ''
+        echo activate: creating basic filesystems
+
+        ${final.activateFilesystemsCommands}
+      ''
+      ''
+        echo activate: linking system closure
+
+        ${final.activateClosureCommands}
+      ''
+      ''
+        echo activate: loading kernel modules
+
+        ${final.activateModulesCommands}
+      ''
+      ''
+        echo activate: setting up etc
+
+        ${final.activateEtcCommands}
+      ''
+      ''
+        echo activate: setting up users
+
+        ${final.activateUsersCommands}
+      ''
+      ''
+        echo activate: setting up hostname
+
+        ${final.activateHostnameCommands}
+      ''
     ];
     activate = final.pkgs.writeScript "activate" final.activateCommands;
 
     # mount basic filesystems during activation
     activateFilesystemsCommands = ''
-      echo activate: creating basic filesystems
-
       # mount basic filesystems
       mount_if_not_mounted devtmpfs /dev -o 'nosuid,strictatime,mode=755,size=5%' -t devtmpfs
       mount_if_not_mounted devpts /dev/pts -o 'nosuid,noexec,mode=620,ptmxmode=0666,gid=3' -t devpts
@@ -440,38 +467,30 @@ let
       mount_if_not_mounted tmpfs /tmp -o 'nosuid,noexec,nodev' -t tmpfs
 
       # create basic filesystems
-      mkdir -p /var/tmp /var/empty /var/services
+      mkdir -p /var/tmp /var/empty /var/lib /var/services
       chmod 1777 /var/tmp
       chmod 755 /var/empty
+      chmod 755 /var/lib
       chmod 750 /var/services
     '';
 
     # link system closure during activation
     activateClosureCommands = ''
-      echo activate: linking system closure
-
       ln -sfn "$closure" /run/current-system
     '';
 
     # load kernel modules during activation
     activateModulesCommands = ''
-      echo activate: loading kernel modules
-
-      ${final.loadModules final.modules.init}
+      # load modules
+      ${final.loadModules final.initModules}
       cat "${final.lib.getExe final.wrappers.modprobe}" > /proc/sys/kernel/modprobe
-    '';
 
-    # mount efivars
-    activateEfivarsCommands = ''
-      echo activate: mounting efivars
-
+      # mount efivars after loading efivarfs
       mount_if_not_mounted efivarfs /sys/firmware/efi/efivars -o 'nosuid,noexec,nodev' -t efivarfs
     '';
 
     # set up etc during activation
     activateEtcCommands = ''
-      echo activate: setting up etc
-
       # etc lowerdir
       # /run/etc.next/.lower should be free after the mount --move from last time
       mount_if_not_mounted /run/current-system/etc /run/etc.next/.lower -t erofs
@@ -497,8 +516,6 @@ let
 
     # set up users and groups during activation
     activateUsersCommands = ''
-      echo activate: setting up users
-
       # shadow 
       if [ -f /persist/secrets/shadow ]; then 
           cat /persist/secrets/shadow > /etc/shadow
@@ -530,8 +547,6 @@ let
 
     # set system hostname during activation
     activateHostnameCommands = ''
-      echo activate: setting up hostname
-
       # set system hostname
       hostname $(cat /etc/hostname)
     '';

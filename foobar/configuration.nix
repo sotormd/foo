@@ -639,7 +639,7 @@ let
 
       fi
 
-      echo rebuild: new generation "$number" is at "$closure"
+      echo rebuild: new generation "$number" is at "$generation"
     '';
     foobarRebuild = final.pkgs.writeScriptBin "foobar-rebuild" final.foobarRebuildCommands;
 

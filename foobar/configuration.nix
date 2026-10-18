@@ -44,11 +44,46 @@ let
     # the foo build outputs
     foo = final.buildFoo { inherit (final) config pkgs; };
 
+    # generation
+    # contains toplevel, uki, bootloader, foobarRebuild
+    generation =
+      final.pkgs.runCommand "foobar-generation"
+        {
+          inherit (final.foo.build)
+            uki
+            bootloader
+            toplevel
+            foobarRebuild
+            installUki
+            installBootloader
+            ;
+        }
+        ''
+          mkdir -p "$out"
+
+          ln -s "$uki" "$out/uki"
+          ln -s "$bootloader" "$out/bootloader"
+          ln -s "$toplevel" "$out/toplevel"
+
+          ln -s "$foobar-rebuild" "$out/foobar-rebuild"
+          ln -s "$install-uki" "$out/install-uki"
+          ln -s "$install-bootloader" "$out/install-bootloader"
+        '';
+
     # buildFoo foo version
     version = "0.0.1";
 
     # extra outputs
-    extraOutputs = { inherit (final) diskImage bootloader foobarRebuild; };
+    extraOutputs = {
+      inherit (final)
+        diskImage
+        bootloader
+        foobarRebuild
+        installUki
+        installBootloader
+        generation
+        ;
+    };
 
     # foo configuration
     config = {
@@ -93,20 +128,6 @@ let
       {
         source = final.activate;
         name = "activate";
-      }
-
-      # /run/current-system/install-uki
-      # install uki to /boot
-      {
-        source = final.installUki;
-        name = "install-uki";
-      }
-
-      # /run/current-system/install-bootloader
-      # install bootloader to /boot
-      {
-        source = final.installBootloader;
-        name = "install-bootloader";
       }
 
       # /run/current-system/kernel-modules
@@ -578,26 +599,25 @@ let
       current=$(readlink /nix/var/nix/profiles/foobar/system | awk -F- '{ print $2 }')
       echo rebuild: current generation "$current" is at "$(realpath /nix/var/nix/profiles/foobar/system)"
 
-      echo rebuild: building system closure
-      closure=$(nix build -f "$FOOBAR_CONFIG" build.toplevel --no-link --print-out-paths)
+      echo rebuild: building system configuration
+      generation=$(nix build -f "$FOOBAR_CONFIG" build.generation --no-link --print-out-paths)
+
+      closure=$(realpath "$generation/toplevel")
 
       if [ "$1" = "boot" ] || [ "$1" = "switch" ]; then
 
-          echo rebuild: building uki
-          uki=$(nix build -f "$FOOBAR_CONFIG" build.uki --no-link --print-out-paths)
-
-          echo rebuild: building bootloader
-          bootloader=$(nix build -f "$FOOBAR_CONFIG" build.bootloader --no-link --print-out-paths)
+          uki=$(realpath "$generation/uki")
+          bootloader=$(realpath "$generation/bootloader")
 
           echo rebuild: installing system closure
           nix-env --profile /nix/var/nix/profiles/foobar/system --set "$closure"
           number=$(readlink /nix/var/nix/profiles/foobar/system | awk -F- '{ print $2 }')
 
           echo rebuild: installing uki
-          env -i uki="$uki" number="$number" "$closure/install-uki"
+          env -i uki="$uki" number="$number" "$generation/install-uki"
 
           echo rebuild: installing bootloader
-          env -i bootloader="$bootloader" "$closure/install-bootloader"
+          env -i bootloader="$bootloader" "$generation/install-bootloader"
 
       elif [ "$1" = "test" ]; then
 

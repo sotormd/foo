@@ -769,6 +769,7 @@ let
 
       echo secureboot: generating keys
 
+      mkdir -p /var/lib
       sbctl create-keys
 
       echo secureboot: generated :-

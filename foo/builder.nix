@@ -15,6 +15,7 @@ let
     text = ''
       #!${config.initrd.interpreter}
 
+      export PATH=/bin
       export BOOTED_CLOSURE=${toplevel}
 
       ${config.initrd.commands}

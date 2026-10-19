@@ -257,6 +257,11 @@ let
       mount -t proc proc /proc
       mount -t sysfs sysfs /sys
       mount -t devtmpfs devtmpfs /dev
+
+      ln -sfn /proc/self/fd /dev/fd
+      ln -sfn /proc/self/fd/0 /dev/stdin
+      ln -sfn /proc/self/fd/1 /dev/stdout
+      ln -sfn /proc/self/fd/2 /dev/stderr
     '';
 
     # find real root in initrd
@@ -493,6 +498,12 @@ let
       mount_if_not_mounted tmpfs /run -o 'nosuid,nodev,strictatime,mode=755,size=25%' -t tmpfs
       mount_if_not_mounted sysfs /sys -o 'nosuid,noexec,nodev' -t sysfs
       mount_if_not_mounted tmpfs /tmp -o 'nosuid,noexec,nodev' -t tmpfs
+
+      # file descriptors
+      ln -sfn /proc/self/fd /dev/fd
+      ln -sfn /proc/self/fd/0 /dev/stdin
+      ln -sfn /proc/self/fd/1 /dev/stdout
+      ln -sfn /proc/self/fd/2 /dev/stderr
 
       # create basic filesystems
       mkdir -p /var/tmp /var/empty /var/lib /var/services

@@ -9,6 +9,17 @@ Type: String
 
 ---
 
+`initrd.contents`
+
+Extra contents to add to initrd. For example, additional libraries
+required by tools in the initrd. This is passed directly as-is to
+`pkgs.makeInitrdNG`. `/bin` and `/lib/modules` and `/init` are always
+created from other options.
+
+Type: List of attrs
+
+---
+
 `initrd.interpreter`
 
 Path to POSIX-compatible shebang interpreter to use for initrd.

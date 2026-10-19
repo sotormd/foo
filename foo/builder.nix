@@ -43,7 +43,8 @@ let
         source = initrdModules + "/lib/modules";
         target = "/lib/modules";
       }
-    ];
+    ]
+    ++ config.initrdContents;
   };
 
   uki = pkgs.runCommand "uki" { nativeBuildInputs = [ pkgs.systemdUkify ]; } ''

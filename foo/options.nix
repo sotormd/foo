@@ -97,6 +97,17 @@ in
           Type: List of packages
         '';
       };
+      contents = {
+        inherit _option;
+        description = ''
+          Extra contents to add to initrd. For example, additional libraries
+          required by tools in the initrd. This is passed directly as-is to
+          `pkgs.makeInitrdNG`. `/bin` and `/lib/modules` and `/init` are always
+          created from other options.
+
+          Type: List of attrs
+        '';
+      };
       commands = {
         inherit _option;
         description = ''

@@ -108,9 +108,13 @@ let
         modules = final.initrdModules;
         interpreter = final.initrdInterpreter;
         packages = final.initrdPackages;
+        contents = final.initrdContents;
         commands = final.initrdCommands;
       };
     };
+
+    # extra initrd contents
+    initrdContents = [ ];
 
     # toplevel paths
     toplevelPaths = [
